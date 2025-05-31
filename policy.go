@@ -30,22 +30,22 @@ type clientSelector interface {
 	Pick() Client
 }
 
-// sequentialPolicy is used to select clients based on its sequential order
-type sequentialPolicy struct {
+// SequentialPolicy is used to select clients based on its sequential order
+type SequentialPolicy struct {
 }
 
 // creates new sequential selector of provided clients
-func (p *sequentialPolicy) selector(clients []Client) clientSelector {
+func (p *SequentialPolicy) selector(clients []Client) clientSelector {
 	return selector.NewSequentialSelector(clients)
 }
 
 // weightedPolicy is used to select clients randomly based on its loadFactor (weights)
-type weightedPolicy struct {
+type WeightedPolicy struct {
 	loadFactor []int
 	r          *rand.Rand
 }
 
 // creates new weighted random selector of provided clients based on loadFactor
-func (p *weightedPolicy) selector(clients []Client) clientSelector {
+func (p *WeightedPolicy) selector(clients []Client) clientSelector {
 	return selector.NewWeightedRandSelector(clients, p.loadFactor, p.r)
 }

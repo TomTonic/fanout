@@ -44,7 +44,7 @@ func toDnstap(f *Fanout, host string, state *request.Request, reply *dns.Msg, st
 	ip := net.ParseIP(h)
 
 	var ta net.Addr = &net.UDPAddr{IP: ip, Port: int(port)}
-	t := f.net
+	t := f.Net
 
 	if t == "tcp" {
 		ta = &net.TCPAddr{IP: ip, Port: int(port)}
@@ -52,18 +52,18 @@ func toDnstap(f *Fanout, host string, state *request.Request, reply *dns.Msg, st
 
 	var _ = msg.SetQueryAddress(q, ta)
 
-	if f.tapPlugin.IncludeRawMessage {
+	if f.TapPlugin.IncludeRawMessage {
 		buf, _ := state.Req.Pack()
 		q.QueryMessage = buf
 	}
 	msg.SetType(q, tap.Message_FORWARDER_QUERY)
-	f.tapPlugin.TapMessage(q)
+	f.TapPlugin.TapMessage(q)
 
 	// Response
 	if reply != nil {
 		r := new(tap.Message)
 
-		if f.tapPlugin.IncludeRawMessage {
+		if f.TapPlugin.IncludeRawMessage {
 			buf, _ := reply.Pack()
 			r.ResponseMessage = buf
 		}
@@ -71,6 +71,6 @@ func toDnstap(f *Fanout, host string, state *request.Request, reply *dns.Msg, st
 		var _ = msg.SetQueryAddress(r, ta)
 		msg.SetResponseTime(r, time.Now())
 		msg.SetType(r, tap.Message_FORWARDER_RESPONSE)
-		f.tapPlugin.TapMessage(r)
+		f.TapPlugin.TapMessage(r)
 	}
 }

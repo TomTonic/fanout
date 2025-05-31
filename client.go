@@ -54,7 +54,7 @@ func NewClient(addr, net string) Client {
 // SetTLSConfig sets tls config for client
 func (c *client) SetTLSConfig(cfg *tls.Config) {
 	if cfg != nil {
-		c.net = tcptls
+		c.net = Tcptls
 	}
 	c.transport.SetTLSConfig(cfg)
 }

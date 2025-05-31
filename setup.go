@@ -62,7 +62,7 @@ func setup(c *caddy.Controller) error {
 	c.OnStartup(func() error {
 		if taph := dnsserver.GetConfig(c).Handler("dnstap"); taph != nil {
 			if tapPlugin, ok := taph.(*dnstap.Dnstap); ok {
-				f.tapPlugin = tapPlugin
+				f.TapPlugin = tapPlugin
 			}
 		}
 		return f.OnStartup()
@@ -104,15 +104,15 @@ func parseFanout(c *caddy.Controller) (*Fanout, error) {
 
 func parsefanoutStanza(c *caddyfile.Dispenser) (*Fanout, error) {
 	f := New()
-	if !c.Args(&f.from) {
+	if !c.Args(&f.From) {
 		return f, c.ArgErr()
 	}
 
-	normalized := plugin.Host(f.from).NormalizeExact()
+	normalized := plugin.Host(f.From).NormalizeExact()
 	if len(normalized) == 0 {
-		return nil, errors.Errorf("unable to normalize '%s'", f.from)
+		return nil, errors.Errorf("unable to normalize '%s'", f.From)
 	}
-	f.from = normalized[0]
+	f.From = normalized[0]
 
 	to := c.RemainingArgs()
 	if len(to) == 0 {
@@ -134,8 +134,8 @@ func parsefanoutStanza(c *caddyfile.Dispenser) (*Fanout, error) {
 		return nil, err
 	}
 
-	if f.workerCount > len(f.clients) || f.workerCount == 0 {
-		f.workerCount = len(f.clients)
+	if f.WorkerCount > len(f.clients) || f.WorkerCount == 0 {
+		f.WorkerCount = len(f.clients)
 	}
 
 	return f, nil
@@ -145,14 +145,14 @@ func initClients(f *Fanout, hosts []string) {
 	transports := make([]string, len(hosts))
 	for i, host := range hosts {
 		trans, h := parse.Transport(host)
-		f.clients = append(f.clients, NewClient(h, f.net))
+		f.clients = append(f.clients, NewClient(h, f.Net))
 		transports[i] = trans
 	}
 
-	f.tlsConfig.ServerName = f.tlsServerName
+	f.TlsConfig.ServerName = f.TlsServerName
 	for i := range f.clients {
 		if transports[i] == transport.TLS {
-			f.clients[i].SetTLSConfig(f.tlsConfig)
+			f.clients[i].SetTLSConfig(f.TlsConfig)
 		}
 	}
 }
@@ -162,7 +162,7 @@ func initServerSelectionPolicy(f *Fanout) error {
 		f.serverCount = len(f.clients)
 	}
 
-	loadFactor := f.loadFactor
+	loadFactor := f.LoadFactor
 	if len(loadFactor) == 0 {
 		for i := 0; i < len(f.clients); i++ {
 			loadFactor = append(loadFactor, maxLoadFactor)
@@ -172,9 +172,9 @@ func initServerSelectionPolicy(f *Fanout) error {
 		return errors.New("load-factor params count must be the same as the number of hosts")
 	}
 
-	f.serverSelectionPolicy = &sequentialPolicy{}
-	if f.policyType == policyWeightedRandom {
-		f.serverSelectionPolicy = &weightedPolicy{
+	f.ServerSelectionPolicy = &SequentialPolicy{}
+	if f.policyType == PolicyWeightedRandom {
+		f.ServerSelectionPolicy = &WeightedPolicy{
 			loadFactor: loadFactor,
 			//nolint:gosec // it's overhead to use crypto/rand here
 			r: rand.New(rand.NewSource(time.Now().UnixNano())),
@@ -212,7 +212,7 @@ func parseValue(v string, f *Fanout, c *caddyfile.Dispenser) error {
 		return parseIgnoredFromFile(f, c)
 	case "attempt-count":
 		num, err := parsePositiveInt(c)
-		f.attempts = num
+		f.Attempts = num
 		return err
 	default:
 		return errors.Errorf("unknown property %v", v)
@@ -225,7 +225,7 @@ func parsePolicy(f *Fanout, c *caddyfile.Dispenser) error {
 	}
 
 	policyType := strings.ToLower(c.Val())
-	if policyType != policyWeightedRandom && policyType != policySequential {
+	if policyType != PolicyWeightedRandom && policyType != PolicySequential {
 		return errors.Errorf("unknown policy %q", c.Val())
 	}
 	f.policyType = policyType
@@ -239,7 +239,7 @@ func parseTimeout(f *Fanout, c *caddyfile.Dispenser) error {
 	}
 	var err error
 	val := c.Val()
-	f.timeout, err = time.ParseDuration(val)
+	f.Timeout, err = time.ParseDuration(val)
 	return err
 }
 
@@ -247,7 +247,7 @@ func parseRace(f *Fanout, c *caddyfile.Dispenser) error {
 	if c.NextArg() {
 		return c.ArgErr()
 	}
-	f.race = true
+	f.Race = true
 	return nil
 }
 
@@ -266,7 +266,7 @@ func parseIgnoredFromFile(f *Fanout, c *caddyfile.Dispenser) error {
 		if len(normalized) == 0 {
 			return errors.Errorf("unable to normalize '%s'", names[i])
 		}
-		f.excludeDomains.AddString(normalized[0])
+		f.ExcludeDomains.AddString(normalized[0])
 	}
 	return nil
 }
@@ -281,19 +281,19 @@ func parseIgnored(f *Fanout, c *caddyfile.Dispenser) error {
 		if len(normalized) == 0 {
 			return errors.Errorf("unable to normalize '%s'", ignore[i])
 		}
-		f.excludeDomains.AddString(normalized[0])
+		f.ExcludeDomains.AddString(normalized[0])
 	}
 	return nil
 }
 
 func parseWorkerCount(f *Fanout, c *caddyfile.Dispenser) error {
 	var err error
-	f.workerCount, err = parsePositiveInt(c)
+	f.WorkerCount, err = parsePositiveInt(c)
 	if err == nil {
-		if f.workerCount < minWorkerCount {
+		if f.WorkerCount < minWorkerCount {
 			return errors.New("worker count should be more or equal 2. Consider to use Forward plugin")
 		}
-		if f.workerCount > maxWorkerCount {
+		if f.WorkerCount > maxWorkerCount {
 			return errors.Errorf("worker count more then max value: %v", maxWorkerCount)
 		}
 	}
@@ -319,7 +319,7 @@ func parseLoadFactor(f *Fanout, c *caddyfile.Dispenser) error {
 			return errors.Errorf("load-factor %d should be less than %d", loadFactor, maxLoadFactor)
 		}
 
-		f.loadFactor = append(f.loadFactor, loadFactor)
+		f.LoadFactor = append(f.LoadFactor, loadFactor)
 	}
 
 	return nil
@@ -344,7 +344,7 @@ func parseTLSServer(f *Fanout, c *caddyfile.Dispenser) error {
 	if !c.NextArg() {
 		return c.ArgErr()
 	}
-	f.tlsServerName = c.Val()
+	f.TlsServerName = c.Val()
 	return nil
 }
 
@@ -353,10 +353,10 @@ func parseProtocol(f *Fanout, c *caddyfile.Dispenser) error {
 		return c.ArgErr()
 	}
 	net := strings.ToLower(c.Val())
-	if net != tcp && net != udp && net != tcptls {
+	if net != Tcp && net != Udp && net != Tcptls {
 		return errors.New("unknown network protocol")
 	}
-	f.net = net
+	f.Net = net
 	return nil
 }
 
@@ -370,6 +370,6 @@ func parseTLS(f *Fanout, c *caddyfile.Dispenser) error {
 	if err != nil {
 		return err
 	}
-	f.tlsConfig = tlsConfig
+	f.TlsConfig = tlsConfig
 	return nil
 }

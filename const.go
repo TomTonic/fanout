@@ -22,15 +22,15 @@ const (
 	maxIPCount           = 100
 	maxLoadFactor        = 100
 	minLoadFactor        = 1
-	policyWeightedRandom = "weighted-random"
-	policySequential     = "sequential"
+	PolicyWeightedRandom = "weighted-random"
+	PolicySequential     = "sequential"
 	maxWorkerCount       = 32
 	minWorkerCount       = 2
 	maxTimeout           = 2 * time.Second
 	defaultTimeout       = 30 * time.Second
 	readTimeout          = 2 * time.Second
 	attemptDelay         = time.Millisecond * 100
-	tcptls               = "tcp-tls"
-	tcp                  = "tcp"
-	udp                  = "udp"
+	Tcptls               = "tcp-tls"
+	Tcp                  = "tcp"
+	Udp                  = "udp"
 )

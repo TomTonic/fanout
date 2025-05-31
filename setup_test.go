@@ -44,15 +44,15 @@ func TestSetup(t *testing.T) {
 		expectedErr         string
 	}{
 		// positive
-		{input: "fanout . 127.0.0.1 {\npolicy weighted-random \nweighted-random-server-count 5 weighted-random-load-factor 100\n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 1, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedServerCount: 1, expectedLoadFactor: []int{100}, expectedPolicy: policyWeightedRandom},
+		{input: "fanout . 127.0.0.1 {\npolicy weighted-random \nweighted-random-server-count 5 weighted-random-load-factor 100\n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 1, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedServerCount: 1, expectedLoadFactor: []int{100}, expectedPolicy: PolicyWeightedRandom},
 		{input: "fanout . 127.0.0.1", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 1, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedServerCount: 1, expectedLoadFactor: nil, expectedPolicy: ""},
-		{input: "fanout . 127.0.0.1 {\npolicy weighted-random \nserver-count 5 load-factor 100\n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 1, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedServerCount: 1, expectedLoadFactor: []int{100}, expectedPolicy: policyWeightedRandom},
+		{input: "fanout . 127.0.0.1 {\npolicy weighted-random \nserver-count 5 load-factor 100\n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 1, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedServerCount: 1, expectedLoadFactor: []int{100}, expectedPolicy: PolicyWeightedRandom},
 		{input: "fanout . 127.0.0.1 {\nexcept a b\nworker-count 3\n}", expectedFrom: ".", expectedTimeout: defaultTimeout, expectedAttempts: 3, expectedWorkers: 1, expectedIgnored: []string{"a.", "b."}, expectedNetwork: "udp", expectedServerCount: 1, expectedLoadFactor: nil, expectedPolicy: ""},
 		{input: "fanout . 127.0.0.1 127.0.0.2 {\nnetwork tcp\n}", expectedFrom: ".", expectedTimeout: defaultTimeout, expectedAttempts: 3, expectedWorkers: 2, expectedNetwork: "tcp", expectedTo: []string{"127.0.0.1:53", "127.0.0.2:53"}, expectedServerCount: 2, expectedLoadFactor: nil, expectedPolicy: ""},
 		{input: "fanout . 127.0.0.1 127.0.0.2 127.0.0.3 127.0.0.4 {\nworker-count 3\ntimeout 1m\n}", expectedTimeout: time.Minute, expectedAttempts: 3, expectedFrom: ".", expectedWorkers: 3, expectedNetwork: "udp", expectedServerCount: 4, expectedLoadFactor: nil, expectedPolicy: ""},
 		{input: "fanout . 127.0.0.1 127.0.0.2 127.0.0.3 127.0.0.4 {\nattempt-count 2\n}", expectedTimeout: defaultTimeout, expectedFrom: ".", expectedAttempts: 2, expectedWorkers: 4, expectedNetwork: "udp", expectedServerCount: 4, expectedLoadFactor: nil, expectedPolicy: ""},
-		{input: "fanout . 127.0.0.1 127.0.0.2 127.0.0.3 {\npolicy weighted-random \n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 3, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedServerCount: 3, expectedLoadFactor: []int{100, 100, 100}, expectedPolicy: policyWeightedRandom},
-		{input: "fanout . 127.0.0.1 127.0.0.2 127.0.0.3 {\npolicy sequential\nworker-count 3\n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 3, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedServerCount: 3, expectedLoadFactor: nil, expectedPolicy: policySequential},
+		{input: "fanout . 127.0.0.1 127.0.0.2 127.0.0.3 {\npolicy weighted-random \n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 3, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedServerCount: 3, expectedLoadFactor: []int{100, 100, 100}, expectedPolicy: PolicyWeightedRandom},
+		{input: "fanout . 127.0.0.1 127.0.0.2 127.0.0.3 {\npolicy sequential\nworker-count 3\n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 3, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedServerCount: 3, expectedLoadFactor: nil, expectedPolicy: PolicySequential},
 
 		// negative
 		{input: "fanout . aaa", expectedErr: "not an IP address or file"},
@@ -82,18 +82,18 @@ func TestSetup(t *testing.T) {
 			}
 			continue
 		}
-		if f.timeout != test.expectedTimeout {
-			t.Fatalf("Test %d: expected: %d, got: %d", i, test.expectedTimeout, f.timeout)
+		if f.Timeout != test.expectedTimeout {
+			t.Fatalf("Test %d: expected: %d, got: %d", i, test.expectedTimeout, f.Timeout)
 		}
-		if f.attempts != test.expectedAttempts {
-			t.Fatalf("Test %d: expected: %d, got: %d", i, test.expectedAttempts, f.attempts)
+		if f.Attempts != test.expectedAttempts {
+			t.Fatalf("Test %d: expected: %d, got: %d", i, test.expectedAttempts, f.Attempts)
 		}
-		if f.from != test.expectedFrom && test.expectedFrom != "" {
-			t.Fatalf("Test %d: expected: %s, got: %s", i, test.expectedFrom, f.from)
+		if f.From != test.expectedFrom && test.expectedFrom != "" {
+			t.Fatalf("Test %d: expected: %s, got: %s", i, test.expectedFrom, f.From)
 		}
 		if test.expectedIgnored != nil {
 			for _, expected := range test.expectedIgnored {
-				if !f.excludeDomains.Contains(expected) {
+				if !f.ExcludeDomains.Contains(expected) {
 					t.Fatalf("Test %d: missed exclude domain name: %v", i, test.expectedIgnored)
 				}
 			}
@@ -107,11 +107,11 @@ func TestSetup(t *testing.T) {
 				t.Fatalf("Test %d: expected: %q, actual: %q", i, test.expectedTo, to)
 			}
 		}
-		if f.workerCount != test.expectedWorkers {
-			t.Fatalf("Test %d: expected: %d, got: %d", i, test.expectedWorkers, f.workerCount)
+		if f.WorkerCount != test.expectedWorkers {
+			t.Fatalf("Test %d: expected: %d, got: %d", i, test.expectedWorkers, f.WorkerCount)
 		}
-		if f.net != test.expectedNetwork {
-			t.Fatalf("Test %d: expected: %v, got: %v", i, test.expectedNetwork, f.net)
+		if f.Net != test.expectedNetwork {
+			t.Fatalf("Test %d: expected: %v, got: %v", i, test.expectedNetwork, f.Net)
 		}
 		if f.serverCount != test.expectedServerCount {
 			t.Fatalf("Test %d: expected: %d, got: %d", i, test.expectedServerCount, f.serverCount)
@@ -120,16 +120,16 @@ func TestSetup(t *testing.T) {
 			t.Fatalf("Test %d: expected: %s, got: %s", i, test.expectedPolicy, f.policyType)
 		}
 
-		selectionPolicy, ok := f.serverSelectionPolicy.(*weightedPolicy)
+		selectionPolicy, ok := f.ServerSelectionPolicy.(*WeightedPolicy)
 		if len(test.expectedLoadFactor) > 0 {
 			if !ok {
-				t.Fatalf("Test %d: expected weighted policy to be set, got: %T", i, f.serverSelectionPolicy)
+				t.Fatalf("Test %d: expected weighted policy to be set, got: %T", i, f.ServerSelectionPolicy)
 			}
 			if !reflect.DeepEqual(selectionPolicy.loadFactor, test.expectedLoadFactor) {
 				t.Fatalf("Test %d: expected: %d, got: %d", i, test.expectedLoadFactor, selectionPolicy.loadFactor)
 			}
 		} else if ok {
-			t.Fatalf("Test %d: expected sequential policy to be set, got: %T", i, f.serverSelectionPolicy)
+			t.Fatalf("Test %d: expected sequential policy to be set, got: %T", i, f.ServerSelectionPolicy)
 		}
 	}
 }
