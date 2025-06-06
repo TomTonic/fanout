@@ -32,6 +32,7 @@ import (
 type Client interface {
 	Request(context.Context, *request.Request) (*dns.Msg, error)
 	Endpoint() string
+	Net() string
 	SetTLSConfig(*tls.Config)
 }
 
@@ -57,6 +58,11 @@ func (c *client) SetTLSConfig(cfg *tls.Config) {
 		c.net = Tcptls
 	}
 	c.transport.SetTLSConfig(cfg)
+}
+
+// Network type of client
+func (c *client) Net() string {
+	return c.net
 }
 
 // Endpoint returns address of DNS server

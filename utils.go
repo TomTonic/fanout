@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/coredns/coredns/plugin/dnstap"
 	"github.com/coredns/coredns/plugin/dnstap/msg"
 	"github.com/coredns/coredns/request"
 
@@ -35,16 +36,16 @@ func logErrIfNotNil(err error) {
 	log.Error(err)
 }
 
-func toDnstap(f *Fanout, host string, state *request.Request, reply *dns.Msg, start time.Time) {
+func toDnstap(tapPlugin *dnstap.Dnstap, client Client, state *request.Request, reply *dns.Msg, start time.Time) {
 	// Query
 	q := new(tap.Message)
 	msg.SetQueryTime(q, start)
-	h, p, _ := net.SplitHostPort(host)      // this is preparsed and can't err here
+	h, p, _ := net.SplitHostPort(client.Endpoint())      // this is preparsed and can't err here
 	port, _ := strconv.ParseUint(p, 10, 32) // same here
 	ip := net.ParseIP(h)
 
 	var ta net.Addr = &net.UDPAddr{IP: ip, Port: int(port)}
-	t := f.net
+	t := client.Net()
 
 	if t == "tcp" {
 		ta = &net.TCPAddr{IP: ip, Port: int(port)}
@@ -52,18 +53,18 @@ func toDnstap(f *Fanout, host string, state *request.Request, reply *dns.Msg, st
 
 	var _ = msg.SetQueryAddress(q, ta)
 
-	if f.TapPlugin.IncludeRawMessage {
+	if tapPlugin.IncludeRawMessage {
 		buf, _ := state.Req.Pack()
 		q.QueryMessage = buf
 	}
 	msg.SetType(q, tap.Message_FORWARDER_QUERY)
-	f.TapPlugin.TapMessage(q)
+	tapPlugin.TapMessage(q)
 
 	// Response
 	if reply != nil {
 		r := new(tap.Message)
 
-		if f.TapPlugin.IncludeRawMessage {
+		if tapPlugin.IncludeRawMessage {
 			buf, _ := reply.Pack()
 			r.ResponseMessage = buf
 		}
@@ -71,6 +72,6 @@ func toDnstap(f *Fanout, host string, state *request.Request, reply *dns.Msg, st
 		var _ = msg.SetQueryAddress(r, ta)
 		msg.SetResponseTime(r, time.Now())
 		msg.SetType(r, tap.Message_FORWARDER_RESPONSE)
-		f.TapPlugin.TapMessage(r)
+		tapPlugin.TapMessage(r)
 	}
 }

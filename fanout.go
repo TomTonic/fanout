@@ -98,7 +98,7 @@ func (f *Fanout) ServeDNS(ctx context.Context, w dns.ResponseWriter, m *dns.Msg)
 		return dns.RcodeServerFailure, result.err
 	}
 	if f.TapPlugin != nil {
-		toDnstap(f, result.client.Endpoint(), &req, result.response, result.start)
+		toDnstap(f.TapPlugin, result.client, &req, result.response, result.start)
 	}
 	if !req.Match(result.response) {
 		debug.Hexdumpf(result.response, "Wrong reply for id: %d, %s %d", result.response.Id, req.QName(), req.QType())
