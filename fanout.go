@@ -39,17 +39,17 @@ var log = clog.NewWithPlugin("fanout")
 // Fanout represents a plugin instance that can do async requests to list of DNS servers.
 type Fanout struct {
 	clients               []Client
-	TlsConfig             *tls.Config
+	tlsConfig             *tls.Config
 	ExcludeDomains        Domain
-	TlsServerName         string
+	tlsServerName         string
 	Timeout               time.Duration
 	Race                  bool
-	Net                   string
+	net                   string
 	From                  string
 	Attempts              int
 	WorkerCount           int
 	serverCount           int
-	LoadFactor            []int
+	loadFactor            []int
 	policyType            string
 	ServerSelectionPolicy policy
 	TapPlugin             *dnstap.Dnstap
@@ -59,8 +59,8 @@ type Fanout struct {
 // New returns reference to new Fanout plugin instance with default configs.
 func New() *Fanout {
 	return &Fanout{
-		TlsConfig:             new(tls.Config),
-		Net:                   "udp",
+		tlsConfig:             new(tls.Config),
+		net:                   "udp",
 		Attempts:              3,
 		Timeout:               defaultTimeout,
 		ExcludeDomains:        NewDomain(),

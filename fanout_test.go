@@ -237,7 +237,7 @@ func (t *fanoutTestSuite) TestTwoServersUnsuccessfulResponse() {
 	c1 := NewClient(s1.addr, t.network)
 	c2 := NewClient(s2.addr, t.network)
 	f := New()
-	f.Net = t.network
+	f.net = t.network
 	f.From = "."
 	f.AddClient(c1)
 	f.AddClient(c2)
@@ -262,7 +262,7 @@ func (t *fanoutTestSuite) TestCanReturnUnsuccessfulRepose() {
 	})
 	defer s.close()
 	f := New()
-	f.Net = t.network
+	f.net = t.network
 	f.From = "."
 	c := NewClient(s.addr, t.network)
 	f.AddClient(c)
@@ -294,7 +294,7 @@ func (t *fanoutTestSuite) TestBusyServer() {
 	defer s.close()
 	c := NewClient(s.addr, t.network)
 	f := New()
-	f.Net = t.network
+	f.net = t.network
 	f.From = "."
 	f.Attempts = 0
 	f.AddClient(c)
@@ -343,7 +343,7 @@ func (t *fanoutTestSuite) TestTwoServers() {
 	c1 := NewClient(s1.addr, t.network)
 	c2 := NewClient(s2.addr, t.network)
 	f := New()
-	f.Net = t.network
+	f.net = t.network
 	f.From = "."
 	f.AddClient(c1)
 	f.AddClient(c2)
@@ -394,7 +394,7 @@ func (t *fanoutTestSuite) TestServerCount() {
 		//nolint:gosec // init rand with constant seed to get predefined result
 		r: rand.New(rand.NewSource(1)),
 	}
-	f.Net = t.network
+	f.net = t.network
 	f.From = "."
 	f.AddClient(c1)
 	f.AddClient(c2)

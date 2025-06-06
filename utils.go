@@ -44,7 +44,7 @@ func toDnstap(f *Fanout, host string, state *request.Request, reply *dns.Msg, st
 	ip := net.ParseIP(h)
 
 	var ta net.Addr = &net.UDPAddr{IP: ip, Port: int(port)}
-	t := f.Net
+	t := f.net
 
 	if t == "tcp" {
 		ta = &net.TCPAddr{IP: ip, Port: int(port)}

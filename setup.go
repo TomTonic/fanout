@@ -145,14 +145,14 @@ func initClients(f *Fanout, hosts []string) {
 	transports := make([]string, len(hosts))
 	for i, host := range hosts {
 		trans, h := parse.Transport(host)
-		f.clients = append(f.clients, NewClient(h, f.Net))
+		f.clients = append(f.clients, NewClient(h, f.net))
 		transports[i] = trans
 	}
 
-	f.TlsConfig.ServerName = f.TlsServerName
+	f.tlsConfig.ServerName = f.tlsServerName
 	for i := range f.clients {
 		if transports[i] == transport.TLS {
-			f.clients[i].SetTLSConfig(f.TlsConfig)
+			f.clients[i].SetTLSConfig(f.tlsConfig)
 		}
 	}
 }
@@ -162,7 +162,7 @@ func initServerSelectionPolicy(f *Fanout) error {
 		f.serverCount = len(f.clients)
 	}
 
-	loadFactor := f.LoadFactor
+	loadFactor := f.loadFactor
 	if len(loadFactor) == 0 {
 		for i := 0; i < len(f.clients); i++ {
 			loadFactor = append(loadFactor, maxLoadFactor)
@@ -319,7 +319,7 @@ func parseLoadFactor(f *Fanout, c *caddyfile.Dispenser) error {
 			return errors.Errorf("load-factor %d should be less than %d", loadFactor, maxLoadFactor)
 		}
 
-		f.LoadFactor = append(f.LoadFactor, loadFactor)
+		f.loadFactor = append(f.loadFactor, loadFactor)
 	}
 
 	return nil
@@ -344,7 +344,7 @@ func parseTLSServer(f *Fanout, c *caddyfile.Dispenser) error {
 	if !c.NextArg() {
 		return c.ArgErr()
 	}
-	f.TlsServerName = c.Val()
+	f.tlsServerName = c.Val()
 	return nil
 }
 
@@ -356,7 +356,7 @@ func parseProtocol(f *Fanout, c *caddyfile.Dispenser) error {
 	if net != Tcp && net != Udp && net != Tcptls {
 		return errors.New("unknown network protocol")
 	}
-	f.Net = net
+	f.net = net
 	return nil
 }
 
@@ -370,6 +370,6 @@ func parseTLS(f *Fanout, c *caddyfile.Dispenser) error {
 	if err != nil {
 		return err
 	}
-	f.TlsConfig = tlsConfig
+	f.tlsConfig = tlsConfig
 	return nil
 }

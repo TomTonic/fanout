@@ -110,8 +110,8 @@ func TestSetup(t *testing.T) {
 		if f.WorkerCount != test.expectedWorkers {
 			t.Fatalf("Test %d: expected: %d, got: %d", i, test.expectedWorkers, f.WorkerCount)
 		}
-		if f.Net != test.expectedNetwork {
-			t.Fatalf("Test %d: expected: %v, got: %v", i, test.expectedNetwork, f.Net)
+		if f.net != test.expectedNetwork {
+			t.Fatalf("Test %d: expected: %v, got: %v", i, test.expectedNetwork, f.net)
 		}
 		if f.serverCount != test.expectedServerCount {
 			t.Fatalf("Test %d: expected: %d, got: %d", i, test.expectedServerCount, f.serverCount)
