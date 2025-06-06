@@ -173,7 +173,7 @@ func initServerSelectionPolicy(f *Fanout) error {
 	}
 
 	f.ServerSelectionPolicy = &SequentialPolicy{}
-	if f.policyType == PolicyWeightedRandom {
+	if f.policyType == policyWeightedRandom {
 		f.ServerSelectionPolicy = &WeightedPolicy{
 			loadFactor: loadFactor,
 			//nolint:gosec // it's overhead to use crypto/rand here
@@ -225,7 +225,7 @@ func parsePolicy(f *Fanout, c *caddyfile.Dispenser) error {
 	}
 
 	policyType := strings.ToLower(c.Val())
-	if policyType != PolicyWeightedRandom && policyType != PolicySequential {
+	if policyType != policyWeightedRandom && policyType != policySequential {
 		return errors.Errorf("unknown policy %q", c.Val())
 	}
 	f.policyType = policyType

@@ -22,8 +22,8 @@ const (
 	maxIPCount           = 100
 	maxLoadFactor        = 100
 	minLoadFactor        = 1
-	PolicyWeightedRandom = "weighted-random"
-	PolicySequential     = "sequential"
+	policyWeightedRandom = "weighted-random"
+	policySequential     = "sequential"
 	maxWorkerCount       = 32
 	minWorkerCount       = 2
 	maxTimeout           = 2 * time.Second
