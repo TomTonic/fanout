@@ -69,13 +69,13 @@ func newServer(network string, f dns.HandlerFunc) *server {
 	s.Handler = f
 
 	for i := 0; i < 10; i++ {
-		if network == Tcp {
-			s.Listener, _ = net.Listen(Tcp, ":0")
+		if network == TCP {
+			s.Listener, _ = net.Listen(TCP, ":0")
 			if s.Listener != nil {
 				break
 			}
 		} else {
-			s.Listener, _ = net.Listen(Tcp, ":0")
+			s.Listener, _ = net.Listen(TCP, ":0")
 			if s.Listener == nil {
 				continue
 			}
@@ -411,10 +411,10 @@ func (t *fanoutTestSuite) TestServerCount() {
 }
 
 func TestFanoutUDPSuite(t *testing.T) {
-	suite.Run(t, &fanoutTestSuite{network: Udp})
+	suite.Run(t, &fanoutTestSuite{network: UDP})
 }
 func TestFanoutTCPSuite(t *testing.T) {
-	suite.Run(t, &fanoutTestSuite{network: Tcp})
+	suite.Run(t, &fanoutTestSuite{network: TCP})
 }
 
 func nxdomainMsg() *dns.Msg {

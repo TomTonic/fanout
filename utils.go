@@ -40,8 +40,8 @@ func toDnstap(tapPlugin *dnstap.Dnstap, client Client, state *request.Request, r
 	// Query
 	q := new(tap.Message)
 	msg.SetQueryTime(q, start)
-	h, p, _ := net.SplitHostPort(client.Endpoint())      // this is preparsed and can't err here
-	port, _ := strconv.ParseUint(p, 10, 32) // same here
+	h, p, _ := net.SplitHostPort(client.Endpoint()) // this is preparsed and can't err here
+	port, _ := strconv.ParseUint(p, 10, 32)         // same here
 	ip := net.ParseIP(h)
 
 	var ta net.Addr = &net.UDPAddr{IP: ip, Port: int(port)}

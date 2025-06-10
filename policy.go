@@ -39,7 +39,7 @@ func (p *SequentialPolicy) selector(clients []Client) clientSelector {
 	return selector.NewSequentialSelector(clients)
 }
 
-// weightedPolicy is used to select clients randomly based on its loadFactor (weights)
+// WeightedPolicy is used to select clients randomly based on its loadFactor (weights)
 type WeightedPolicy struct {
 	loadFactor []int
 	r          *rand.Rand

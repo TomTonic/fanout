@@ -68,6 +68,7 @@ func New() *Fanout {
 	}
 }
 
+// AddClient is used to add a new DNS server to the fanout
 func (f *Fanout) AddClient(p Client) {
 	f.clients = append(f.clients, p)
 	f.WorkerCount++
