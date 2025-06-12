@@ -40,19 +40,19 @@ var log = clog.NewWithPlugin("fanout")
 type Fanout struct {
 	clients               []Client
 	tlsConfig             *tls.Config
-	excludeDomains        Domain
+	ExcludeDomains        Domain
 	tlsServerName         string
-	timeout               time.Duration
-	race                  bool
+	Timeout               time.Duration
+	Race                  bool
 	net                   string
-	from                  string
-	attempts              int
-	workerCount           int
+	From                  string
+	Attempts              int
+	WorkerCount           int
 	serverCount           int
 	loadFactor            []int
 	policyType            string
-	serverSelectionPolicy policy
-	tapPlugin             *dnstap.Dnstap
+	ServerSelectionPolicy policy
+	TapPlugin             *dnstap.Dnstap
 	Next                  plugin.Handler
 }
 
@@ -61,16 +61,17 @@ func New() *Fanout {
 	return &Fanout{
 		tlsConfig:             new(tls.Config),
 		net:                   "udp",
-		attempts:              3,
-		timeout:               defaultTimeout,
-		excludeDomains:        NewDomain(),
-		serverSelectionPolicy: &sequentialPolicy{}, // default policy
+		Attempts:              3,
+		Timeout:               defaultTimeout,
+		ExcludeDomains:        NewDomain(),
+		ServerSelectionPolicy: &SequentialPolicy{}, // default policy
 	}
 }
 
-func (f *Fanout) addClient(p Client) {
+// AddClient is used to add a new DNS server to the fanout
+func (f *Fanout) AddClient(p Client) {
 	f.clients = append(f.clients, p)
-	f.workerCount++
+	f.WorkerCount++
 	f.serverCount++
 }
 
@@ -85,7 +86,7 @@ func (f *Fanout) ServeDNS(ctx context.Context, w dns.ResponseWriter, m *dns.Msg)
 	if !f.match(&req) {
 		return plugin.NextOrFailure(f.Name(), f.Next, ctx, w, m)
 	}
-	timeoutContext, cancel := context.WithTimeout(ctx, f.timeout)
+	timeoutContext, cancel := context.WithTimeout(ctx, f.Timeout)
 	defer cancel()
 	result := f.getFanoutResult(timeoutContext, f.runWorkers(timeoutContext, &req))
 	if result == nil {
@@ -97,8 +98,8 @@ func (f *Fanout) ServeDNS(ctx context.Context, w dns.ResponseWriter, m *dns.Msg)
 	if result.err != nil {
 		return dns.RcodeServerFailure, result.err
 	}
-	if f.tapPlugin != nil {
-		toDnstap(f, result.client.Endpoint(), &req, result.response, result.start)
+	if f.TapPlugin != nil {
+		toDnstap(f.TapPlugin, result.client, &req, result.response, result.start)
 	}
 	if !req.Match(result.response) {
 		debug.Hexdumpf(result.response, "Wrong reply for id: %d, %s %d", result.response.Id, req.QName(), req.QType())
@@ -112,8 +113,8 @@ func (f *Fanout) ServeDNS(ctx context.Context, w dns.ResponseWriter, m *dns.Msg)
 }
 
 func (f *Fanout) runWorkers(ctx context.Context, req *request.Request) chan *response {
-	sel := f.serverSelectionPolicy.selector(f.clients)
-	workerCh := make(chan Client, f.workerCount)
+	sel := f.ServerSelectionPolicy.selector(f.clients)
+	workerCh := make(chan Client, f.WorkerCount)
 	responseCh := make(chan *response, f.serverCount)
 	go func() {
 		defer close(workerCh)
@@ -128,9 +129,9 @@ func (f *Fanout) runWorkers(ctx context.Context, req *request.Request) chan *res
 
 	go func() {
 		var wg sync.WaitGroup
-		wg.Add(f.workerCount)
+		wg.Add(f.WorkerCount)
 
-		for i := 0; i < f.workerCount; i++ {
+		for i := 0; i < f.WorkerCount; i++ {
 			go func() {
 				defer wg.Done()
 				for c := range workerCh {
@@ -166,7 +167,7 @@ func (f *Fanout) getFanoutResult(ctx context.Context, responseCh <-chan *respons
 			if r.err != nil {
 				break
 			}
-			if f.race {
+			if f.Race {
 				return r
 			}
 			if r.response.Rcode != dns.RcodeSuccess {
@@ -178,7 +179,7 @@ func (f *Fanout) getFanoutResult(ctx context.Context, responseCh <-chan *respons
 }
 
 func (f *Fanout) match(state *request.Request) bool {
-	if !plugin.Name(f.from).Matches(state.Name()) || f.excludeDomains.Contains(state.Name()) {
+	if !plugin.Name(f.From).Matches(state.Name()) || f.ExcludeDomains.Contains(state.Name()) {
 		return false
 	}
 	return true
@@ -187,7 +188,7 @@ func (f *Fanout) match(state *request.Request) bool {
 func (f *Fanout) processClient(ctx context.Context, c Client, r *request.Request) *response {
 	start := time.Now()
 	var err error
-	for j := 0; j < f.attempts || f.attempts == 0; <-time.After(attemptDelay) {
+	for j := 0; j < f.Attempts || f.Attempts == 0; <-time.After(attemptDelay) {
 		if ctx.Err() != nil {
 			return &response{client: c, response: nil, start: start, err: ctx.Err()}
 		}
@@ -196,7 +197,7 @@ func (f *Fanout) processClient(ctx context.Context, c Client, r *request.Request
 		if err == nil {
 			return &response{client: c, response: msg, start: start, err: err}
 		}
-		if f.attempts != 0 {
+		if f.Attempts != 0 {
 			j++
 		}
 	}

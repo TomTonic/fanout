@@ -82,18 +82,18 @@ func TestSetup(t *testing.T) {
 			}
 			continue
 		}
-		if f.timeout != test.expectedTimeout {
-			t.Fatalf("Test %d: expected: %d, got: %d", i, test.expectedTimeout, f.timeout)
+		if f.Timeout != test.expectedTimeout {
+			t.Fatalf("Test %d: expected: %d, got: %d", i, test.expectedTimeout, f.Timeout)
 		}
-		if f.attempts != test.expectedAttempts {
-			t.Fatalf("Test %d: expected: %d, got: %d", i, test.expectedAttempts, f.attempts)
+		if f.Attempts != test.expectedAttempts {
+			t.Fatalf("Test %d: expected: %d, got: %d", i, test.expectedAttempts, f.Attempts)
 		}
-		if f.from != test.expectedFrom && test.expectedFrom != "" {
-			t.Fatalf("Test %d: expected: %s, got: %s", i, test.expectedFrom, f.from)
+		if f.From != test.expectedFrom && test.expectedFrom != "" {
+			t.Fatalf("Test %d: expected: %s, got: %s", i, test.expectedFrom, f.From)
 		}
 		if test.expectedIgnored != nil {
 			for _, expected := range test.expectedIgnored {
-				if !f.excludeDomains.Contains(expected) {
+				if !f.ExcludeDomains.Contains(expected) {
 					t.Fatalf("Test %d: missed exclude domain name: %v", i, test.expectedIgnored)
 				}
 			}
@@ -107,8 +107,8 @@ func TestSetup(t *testing.T) {
 				t.Fatalf("Test %d: expected: %q, actual: %q", i, test.expectedTo, to)
 			}
 		}
-		if f.workerCount != test.expectedWorkers {
-			t.Fatalf("Test %d: expected: %d, got: %d", i, test.expectedWorkers, f.workerCount)
+		if f.WorkerCount != test.expectedWorkers {
+			t.Fatalf("Test %d: expected: %d, got: %d", i, test.expectedWorkers, f.WorkerCount)
 		}
 		if f.net != test.expectedNetwork {
 			t.Fatalf("Test %d: expected: %v, got: %v", i, test.expectedNetwork, f.net)
@@ -120,16 +120,16 @@ func TestSetup(t *testing.T) {
 			t.Fatalf("Test %d: expected: %s, got: %s", i, test.expectedPolicy, f.policyType)
 		}
 
-		selectionPolicy, ok := f.serverSelectionPolicy.(*weightedPolicy)
+		selectionPolicy, ok := f.ServerSelectionPolicy.(*WeightedPolicy)
 		if len(test.expectedLoadFactor) > 0 {
 			if !ok {
-				t.Fatalf("Test %d: expected weighted policy to be set, got: %T", i, f.serverSelectionPolicy)
+				t.Fatalf("Test %d: expected weighted policy to be set, got: %T", i, f.ServerSelectionPolicy)
 			}
 			if !reflect.DeepEqual(selectionPolicy.loadFactor, test.expectedLoadFactor) {
 				t.Fatalf("Test %d: expected: %d, got: %d", i, test.expectedLoadFactor, selectionPolicy.loadFactor)
 			}
 		} else if ok {
-			t.Fatalf("Test %d: expected sequential policy to be set, got: %T", i, f.serverSelectionPolicy)
+			t.Fatalf("Test %d: expected sequential policy to be set, got: %T", i, f.ServerSelectionPolicy)
 		}
 	}
 }

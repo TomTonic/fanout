@@ -69,13 +69,13 @@ func newServer(network string, f dns.HandlerFunc) *server {
 	s.Handler = f
 
 	for i := 0; i < 10; i++ {
-		if network == tcp {
-			s.Listener, _ = net.Listen(tcp, ":0")
+		if network == TCP {
+			s.Listener, _ = net.Listen(TCP, ":0")
 			if s.Listener != nil {
 				break
 			}
 		} else {
-			s.Listener, _ = net.Listen(tcp, ":0")
+			s.Listener, _ = net.Listen(TCP, ":0")
 			if s.Listener == nil {
 				continue
 			}
@@ -127,7 +127,7 @@ func TestFanout_ExceptFile(t *testing.T) {
 	f, err := parseFanout(c)
 	require.Nil(t, err)
 	for _, e := range exclude {
-		require.True(t, f.excludeDomains.Contains(e))
+		require.True(t, f.ExcludeDomains.Contains(e))
 	}
 }
 
@@ -174,12 +174,12 @@ func (t *fanoutTestSuite) TestWorkerCountLessThenServers() {
 	}
 	defer free()
 	f := New()
-	f.from = "."
+	f.From = "."
 
 	for i := 0; i < 4; i++ {
 		incorrectServer := newServer(t.network, func(_ dns.ResponseWriter, _ *dns.Msg) {
 		})
-		f.addClient(NewClient(incorrectServer.addr, t.network))
+		f.AddClient(NewClient(incorrectServer.addr, t.network))
 		closeFuncs = append(closeFuncs, incorrectServer.close)
 	}
 	correctServer := newServer(t.network, func(w dns.ResponseWriter, r *dns.Msg) {
@@ -196,9 +196,9 @@ func (t *fanoutTestSuite) TestWorkerCountLessThenServers() {
 	})
 	defer correctServer.close()
 
-	f.addClient(NewClient(correctServer.addr, t.network))
-	f.workerCount = 1
-	f.attempts = 1
+	f.AddClient(NewClient(correctServer.addr, t.network))
+	f.WorkerCount = 1
+	f.Attempts = 1
 	req := new(dns.Msg)
 	req.SetQuestion(testQuery, dns.TypeA)
 	_, err := f.ServeDNS(context.TODO(), &test.ResponseWriter{}, req)
@@ -238,9 +238,9 @@ func (t *fanoutTestSuite) TestTwoServersUnsuccessfulResponse() {
 	c2 := NewClient(s2.addr, t.network)
 	f := New()
 	f.net = t.network
-	f.from = "."
-	f.addClient(c1)
-	f.addClient(c2)
+	f.From = "."
+	f.AddClient(c1)
+	f.AddClient(c2)
 	writer := &cachedDNSWriter{ResponseWriter: new(test.ResponseWriter)}
 	for i := 0; i < 10; i++ {
 		req := new(dns.Msg)
@@ -263,9 +263,9 @@ func (t *fanoutTestSuite) TestCanReturnUnsuccessfulRepose() {
 	defer s.close()
 	f := New()
 	f.net = t.network
-	f.from = "."
+	f.From = "."
 	c := NewClient(s.addr, t.network)
-	f.addClient(c)
+	f.AddClient(c)
 	req := new(dns.Msg)
 	req.SetQuestion(testQuery, dns.TypeA)
 	writer := &cachedDNSWriter{ResponseWriter: new(test.ResponseWriter)}
@@ -295,9 +295,9 @@ func (t *fanoutTestSuite) TestBusyServer() {
 	c := NewClient(s.addr, t.network)
 	f := New()
 	f.net = t.network
-	f.from = "."
-	f.attempts = 0
-	f.addClient(c)
+	f.From = "."
+	f.Attempts = 0
+	f.AddClient(c)
 	req := new(dns.Msg)
 	req.SetQuestion(testQuery, dns.TypeA)
 	for i := int32(0); i < totalRequestNum; i++ {
@@ -344,9 +344,9 @@ func (t *fanoutTestSuite) TestTwoServers() {
 	c2 := NewClient(s2.addr, t.network)
 	f := New()
 	f.net = t.network
-	f.from = "."
-	f.addClient(c1)
-	f.addClient(c2)
+	f.From = "."
+	f.AddClient(c1)
+	f.AddClient(c2)
 
 	req := new(dns.Msg)
 	req.SetQuestion(testQuery, dns.TypeA)
@@ -389,15 +389,15 @@ func (t *fanoutTestSuite) TestServerCount() {
 	c1 := NewClient(s1.addr, t.network)
 	c2 := NewClient(s2.addr, t.network)
 	f := New()
-	f.serverSelectionPolicy = &weightedPolicy{
+	f.ServerSelectionPolicy = &WeightedPolicy{
 		loadFactor: []int{50, 100},
 		//nolint:gosec // init rand with constant seed to get predefined result
 		r: rand.New(rand.NewSource(1)),
 	}
 	f.net = t.network
-	f.from = "."
-	f.addClient(c1)
-	f.addClient(c2)
+	f.From = "."
+	f.AddClient(c1)
+	f.AddClient(c2)
 	f.serverCount = 1
 
 	req := new(dns.Msg)
@@ -411,10 +411,10 @@ func (t *fanoutTestSuite) TestServerCount() {
 }
 
 func TestFanoutUDPSuite(t *testing.T) {
-	suite.Run(t, &fanoutTestSuite{network: udp})
+	suite.Run(t, &fanoutTestSuite{network: UDP})
 }
 func TestFanoutTCPSuite(t *testing.T) {
-	suite.Run(t, &fanoutTestSuite{network: tcp})
+	suite.Run(t, &fanoutTestSuite{network: TCP})
 }
 
 func nxdomainMsg() *dns.Msg {
