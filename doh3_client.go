@@ -112,6 +112,14 @@ func (c *doh3Client) Endpoint() string {
 	return c.endpoint
 }
 
+// Close releases resources held by this DoH3 client.
+// It closes the current and all previously abandoned QUIC transports,
+// stopping background goroutines started by quic-go.
+func (c *doh3Client) Close() error {
+	c.closeTransports()
+	return nil
+}
+
 // closeTransports closes the current and all previously abandoned QUIC transports.
 // This stops background goroutines started by quic-go and should be called during shutdown.
 func (c *doh3Client) closeTransports() {

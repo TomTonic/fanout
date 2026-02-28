@@ -112,6 +112,17 @@ func (c *dohClient) SetTLSConfig(cfg *tls.Config) {
 	}
 }
 
+// Close releases resources held by this DoH client (closes idle HTTP connections).
+func (c *dohClient) Close() error {
+	c.mu.Lock()
+	hc := c.httpClient
+	c.mu.Unlock()
+	if tr, ok := hc.Transport.(*http.Transport); ok {
+		tr.CloseIdleConnections()
+	}
+	return nil
+}
+
 // Net returns the network type identifier for this client.
 func (c *dohClient) Net() string {
 	return c.netType

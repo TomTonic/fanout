@@ -289,6 +289,12 @@ func (c *doqClient) resetConn() {
 	}
 }
 
+// Close releases resources held by this DoQ client (closes the QUIC connection).
+func (c *doqClient) Close() error {
+	c.closeConn()
+	return nil
+}
+
 // closeConn closes the QUIC connection gracefully. Used by tests for cleanup.
 func (c *doqClient) closeConn() {
 	c.mu.Lock()
