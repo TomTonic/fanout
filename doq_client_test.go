@@ -169,7 +169,7 @@ func handleDoQStream(stream *quic.Stream, handler dns.HandlerFunc, done chan str
 		return
 	}
 	msgLen := binary.BigEndian.Uint16(lenBuf[:])
-	if msgLen == 0 || int(msgLen) > doqMaxMessageSize {
+	if msgLen == 0 {
 		return
 	}
 
