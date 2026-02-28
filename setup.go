@@ -117,18 +117,37 @@ func parsefanoutStanza(c *caddyfile.Dispenser) (*Fanout, error) {
 	if len(to) == 0 {
 		return f, c.ArgErr()
 	}
-	toHosts, err := parse.HostPortOrFile(to...)
-	if err != nil {
-		return f, err
+
+	// Separate DoH URLs (https://...) from plain host entries.
+	var dohURLs []string
+	var plainHosts []string
+	for _, t := range to {
+		if strings.HasPrefix(strings.ToLower(t), "https://") {
+			dohURLs = append(dohURLs, t)
+		} else {
+			plainHosts = append(plainHosts, t)
+		}
 	}
+
+	// Parse non-DoH hosts through the standard host/port/file resolver.
+	var toHosts []string
+	if len(plainHosts) > 0 {
+		var err error
+		toHosts, err = parse.HostPortOrFile(plainHosts...)
+		if err != nil {
+			return f, err
+		}
+	}
+
 	for c.NextBlock() {
-		err = parseValue(strings.ToLower(c.Val()), f, c)
+		err := parseValue(strings.ToLower(c.Val()), f, c)
 		if err != nil {
 			return nil, err
 		}
 	}
 	initClients(f, toHosts)
-	err = initServerSelectionPolicy(f)
+	initDoHClients(f, dohURLs)
+	err := initServerSelectionPolicy(f)
 	if err != nil {
 		return nil, err
 	}
@@ -153,6 +172,18 @@ func initClients(f *Fanout, hosts []string) {
 		if transports[i] == transport.TLS {
 			f.clients[i].SetTLSConfig(f.tlsConfig)
 		}
+	}
+}
+
+// initDoHClients creates DNS-over-HTTPS clients from the provided URLs and appends them
+// to the fanout's client list. Each URL must be a full HTTPS endpoint (e.g. "https://dns.google/dns-query").
+func initDoHClients(f *Fanout, urls []string) {
+	for _, u := range urls {
+		c := NewDoHClient(u)
+		if f.tlsConfig != nil && f.tlsConfig.ServerName != "" {
+			c.SetTLSConfig(f.tlsConfig)
+		}
+		f.addClient(c)
 	}
 }
 
@@ -379,7 +410,7 @@ func parseProtocol(f *Fanout, c *caddyfile.Dispenser) error {
 		return c.ArgErr()
 	}
 	net := strings.ToLower(c.Val())
-	if net != TCP && net != UDP && net != TCPTLS {
+	if net != TCP && net != UDP && net != TCPTLS && net != DOH {
 		return errors.New("unknown network protocol")
 	}
 	f.net = net
