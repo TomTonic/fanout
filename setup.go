@@ -19,6 +19,7 @@
 package fanout
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -118,10 +119,11 @@ func parsefanoutStanza(c *caddyfile.Dispenser) (*Fanout, error) {
 		return f, c.ArgErr()
 	}
 
-	// Separate DoH/DoH3 URLs from plain host entries.
-	// h3:// prefix selects HTTP/3 (QUIC) transport; https:// selects HTTP/2.
+	// Separate protocol-specific URLs from plain host entries.
+	// Scheme prefixes: https:// → DoH (HTTP/2), h3:// → DoH3 (HTTP/3), quic:// → DoQ (RFC 9250).
 	var dohURLs []string
 	var doh3URLs []string
+	var doqAddrs []string
 	var plainHosts []string
 	for _, t := range to {
 		lower := strings.ToLower(t)
@@ -131,6 +133,14 @@ func parsefanoutStanza(c *caddyfile.Dispenser) (*Fanout, error) {
 			doh3URLs = append(doh3URLs, "https://"+t[len("h3://"):])
 		case strings.HasPrefix(lower, "https://"):
 			dohURLs = append(dohURLs, t)
+		case strings.HasPrefix(lower, "quic://"):
+			// quic://host:port -> host:port for raw QUIC (DoQ, RFC 9250).
+			addr := t[len("quic://"):]
+			// Default DoQ port is 853 (same as DoT).
+			if _, _, err := net.SplitHostPort(addr); err != nil {
+				addr = addr + ":853"
+			}
+			doqAddrs = append(doqAddrs, addr)
 		default:
 			plainHosts = append(plainHosts, t)
 		}
@@ -155,6 +165,7 @@ func parsefanoutStanza(c *caddyfile.Dispenser) (*Fanout, error) {
 	initClients(f, toHosts)
 	initDoHClients(f, dohURLs)
 	initDoH3Clients(f, doh3URLs)
+	initDoQClients(f, doqAddrs)
 	err := initServerSelectionPolicy(f)
 	if err != nil {
 		return nil, err
@@ -200,6 +211,18 @@ func initDoHClients(f *Fanout, urls []string) {
 func initDoH3Clients(f *Fanout, urls []string) {
 	for _, u := range urls {
 		c := NewDoH3Client(u)
+		if f.tlsConfig != nil && f.tlsConfig.ServerName != "" {
+			c.SetTLSConfig(f.tlsConfig)
+		}
+		f.addClient(c)
+	}
+}
+
+// initDoQClients creates DNS-over-QUIC (RFC 9250) clients from the provided addresses
+// and appends them to the fanout's client list.
+func initDoQClients(f *Fanout, addrs []string) {
+	for _, a := range addrs {
+		c := NewDoQClient(a)
 		if f.tlsConfig != nil && f.tlsConfig.ServerName != "" {
 			c.SetTLSConfig(f.tlsConfig)
 		}
@@ -430,7 +453,7 @@ func parseProtocol(f *Fanout, c *caddyfile.Dispenser) error {
 		return c.ArgErr()
 	}
 	net := strings.ToLower(c.Val())
-	if net != TCP && net != UDP && net != TCPTLS && net != DOH && net != DOH3 {
+	if net != TCP && net != UDP && net != TCPTLS && net != DOH && net != DOH3 && net != DOQ {
 		return errors.New("unknown network protocol")
 	}
 	f.net = net
