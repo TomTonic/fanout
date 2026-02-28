@@ -850,6 +850,179 @@ func TestSetupAllFourTransports(t *testing.T) {
 	require.Equal(t, DOQ, f.clients[3].Net())
 }
 
+// TestDoQClientReconnectAfterConnectionLoss verifies that the DoQ client transparently
+// reconnects when the underlying QUIC connection is closed. The first request succeeds,
+// then the connection is closed (simulating a network failure or server restart), and the
+// second request must succeed — exercising the reconnection path in getOrDialConn().
+func TestDoQClientReconnectAfterConnectionLoss(t *testing.T) {
+	srv := newDoQTestServer(t, func(w dns.ResponseWriter, r *dns.Msg) {
+		msg := new(dns.Msg)
+		msg.SetReply(r)
+		msg.Answer = append(msg.Answer, &dns.A{
+			Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+			A:   net.ParseIP("1.2.3.4"),
+		})
+		logErrIfNotNil(w.WriteMsg(msg))
+	})
+	defer srv.close()
+
+	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
+	defer closeDoQClient(t, c)
+
+	req := new(dns.Msg)
+	req.SetQuestion("reconnect.example.com.", dns.TypeA)
+
+	// First request — establishes and caches the QUIC connection.
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel1()
+	resp, err := c.Request(ctx1, &request.Request{W: &test.ResponseWriter{}, Req: req})
+	require.NoError(t, err)
+	require.Len(t, resp.Answer, 1)
+
+	// Simulate connection loss: close the cached QUIC connection from the client side
+	// without clearing it, so getOrDialConn discovers the dead connection via Context().Done().
+	dc, ok := c.(*doqClient)
+	require.True(t, ok)
+	dc.mu.Lock()
+	require.NotNil(t, dc.conn, "connection should be cached after first request")
+	_ = dc.conn.CloseWithError(doqInternalError, "simulated connection loss")
+	dc.mu.Unlock()
+
+	// Second request should detect the dead connection and establish a new one.
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	resp, err = c.Request(ctx2, &request.Request{W: &test.ResponseWriter{}, Req: req})
+	require.NoError(t, err)
+	require.Len(t, resp.Answer, 1)
+}
+
+// rawDoQTestServer is a bare QUIC server for testing malformed DoQ responses.
+// It lets the caller supply a custom stream handler instead of using the standard DoQ protocol.
+type rawDoQTestServer struct {
+	listener  *quic.Listener
+	transport *quic.Transport
+	conn      net.PacketConn
+	addr      string
+	clientTLS *tls.Config
+	done      chan struct{}
+}
+
+// close shuts down the raw QUIC test server.
+func (s *rawDoQTestServer) close() {
+	close(s.done)
+	_ = s.listener.Close()
+	_ = s.transport.Close()
+	_ = s.conn.Close()
+}
+
+// newRawDoQTestServer starts a minimal QUIC server that calls streamHandler for each accepted
+// stream. Unlike newDoQTestServer, it does not implement the DoQ protocol — the caller is
+// responsible for reading the query and writing any response on the stream.
+func newRawDoQTestServer(t *testing.T, streamHandler func(s *quic.Stream)) *rawDoQTestServer { //nolint:funlen // test helper setup
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{Organization: []string{"DoQ Raw Test"}},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:     []string{"localhost"},
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	require.NoError(t, err)
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	require.NoError(t, err)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+
+	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
+	require.NoError(t, err)
+
+	certPool := x509.NewCertPool()
+	certPool.AppendCertsFromPEM(certPEM)
+
+	udpConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	tr := &quic.Transport{Conn: udpConn}
+
+	ln, err := tr.Listen(&tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+		MinVersion:   tls.VersionTLS13,
+		NextProtos:   []string{doqALPN},
+	}, &quic.Config{MaxIdleTimeout: 30 * time.Second})
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+
+	go func() {
+		for {
+			qc, acceptErr := ln.Accept(context.Background())
+			if acceptErr != nil {
+				return
+			}
+			go func() {
+				for {
+					stream, streamErr := qc.AcceptStream(context.Background())
+					if streamErr != nil {
+						return
+					}
+					go streamHandler(stream)
+				}
+			}()
+		}
+	}()
+
+	return &rawDoQTestServer{
+		listener:  ln,
+		transport: tr,
+		conn:      udpConn,
+		addr:      udpConn.LocalAddr().String(),
+		clientTLS: &tls.Config{
+			RootCAs:    certPool,
+			MinVersion: tls.VersionTLS13,
+			NextProtos: []string{doqALPN},
+		},
+		done: done,
+	}
+}
+
+// TestDoQClientZeroLengthResponse verifies that the DoQ client returns an error when
+// the server responds with a zero-length prefix, which is invalid per RFC 9250.
+func TestDoQClientZeroLengthResponse(t *testing.T) {
+	srv := newRawDoQTestServer(t, func(s *quic.Stream) {
+		defer (*s).Close() //nolint:errcheck // test cleanup
+		// Read and discard the query.
+		buf := make([]byte, 64*1024)
+		_, _ = io.ReadFull(s, buf[:2])
+		qLen := binary.BigEndian.Uint16(buf[:2])
+		_, _ = io.ReadFull(s, buf[:qLen])
+		// Write a zero-length prefix (invalid).
+		var zeroBuf [2]byte
+		_, _ = (*s).Write(zeroBuf[:])
+	})
+	defer srv.close()
+
+	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
+	defer closeDoQClient(t, c)
+
+	req := new(dns.Msg)
+	req.SetQuestion("zero.example.com.", dns.TypeA)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid response length")
+}
+
 // TestDoQDoesNotBreakExistingSetup verifies that DoQ support does not break
 // existing plain-host, DoH, or DoH3 configurations.
 func TestDoQDoesNotBreakExistingSetup(t *testing.T) {
