@@ -97,7 +97,7 @@ func TestServeDNS_MetadataUpstream(t *testing.T) {
 // must return an error, the plugin must not panic, and it should return ServerFailure.
 func TestServeDNS_MalformedUpstreamResponse(t *testing.T) {
 	defer goleak.VerifyNone(t)
-	s := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+	s := newServer(TCP, func(w dns.ResponseWriter, _ *dns.Msg) {
 		// Write invalid DNS wire data; for TCP the dns library adds the 2-byte length prefix.
 		_, _ = w.Write([]byte{0xDE, 0xAD, 0xBE, 0xEF})
 	})
@@ -213,15 +213,20 @@ func TestServeDNS_ConcurrentStress_ManyServersShortTimeout(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(numQueries)
+	var errCount int32
 	for i := 0; i < numQueries; i++ {
 		go func() {
 			defer wg.Done()
 			req := new(dns.Msg)
 			req.SetQuestion(testQuery, dns.TypeA)
-			f.ServeDNS(context.Background(), &test.ResponseWriter{}, req) //nolint:errcheck
+			_, err := f.ServeDNS(context.Background(), &test.ResponseWriter{}, req)
+			if err != nil {
+				atomic.AddInt32(&errCount, 1)
+			}
 		}()
 	}
 	wg.Wait()
+	require.Equal(t, int32(0), atomic.LoadInt32(&errCount), "stress run should not produce errors")
 	// Primary assertion: no panics, no goroutine leaks (verified by goleak).
 }
 

@@ -1,10 +1,10 @@
 package fanout
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/miekg/dns"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -13,6 +13,8 @@ import (
 // better result than left: success beats error, error beats nil, NXDOMAIN loses to success.
 // This table-driven test covers 16 combinations of nil, error, nil-message, NXDOMAIN, and success
 // responses, ensuring the plugin always selects the most useful answer to return to the client.
+//
+//nolint:funlen // table-driven permutations are kept in one place for readability
 func TestIsBetter(t *testing.T) {
 	okResponse := &response{
 		response: &dns.Msg{MsgHdr: dns.MsgHdr{Rcode: dns.RcodeSuccess}},

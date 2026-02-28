@@ -19,7 +19,7 @@ func TestClient_Request_Edges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pc.Close()
+	defer func() { _ = pc.Close() }()
 
 	c := NewClient(pc.LocalAddr().String(), "udp")
 
@@ -29,7 +29,7 @@ func TestClient_Request_Edges(t *testing.T) {
 	state1 := request.Request{W: &testResponseWriter{}, Req: req1}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	c.Request(ctx, &state1)
+	_, _ = c.Request(ctx, &state1)
 	cancel()
 }
 
@@ -41,9 +41,9 @@ func (t *testResponseWriter) LocalAddr() net.Addr { return nil }
 func (t *testResponseWriter) RemoteAddr() net.Addr {
 	return &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 53}
 }
-func (t *testResponseWriter) WriteMsg(m *dns.Msg) error   { return nil }
+func (t *testResponseWriter) WriteMsg(_ *dns.Msg) error   { return nil }
 func (t *testResponseWriter) Write(b []byte) (int, error) { return len(b), nil }
 func (t *testResponseWriter) Close() error                { return nil }
 func (t *testResponseWriter) TsigStatus() error           { return nil }
-func (t *testResponseWriter) TsigTimersOnly(b bool)       {}
+func (t *testResponseWriter) TsigTimersOnly(_ bool)       {}
 func (t *testResponseWriter) Hijack()                     {}

@@ -23,6 +23,7 @@ func controllerInstance(t *testing.T, c *caddy.Controller) *caddy.Instance {
 	require.True(t, v.IsValid())
 	require.True(t, v.CanAddr())
 
+	//nolint:gosec // test-only reflection to access unexported field from caddy test controller
 	inst := reflect.NewAt(v.Type(), unsafe.Pointer(v.UnsafeAddr())).Elem().Interface().(*caddy.Instance)
 	require.NotNil(t, inst)
 	return inst
@@ -36,6 +37,7 @@ func setConfigRegistryHandler(t *testing.T, cfg *dnsserver.Config, name string, 
 	require.True(t, v.CanAddr())
 
 	m := map[string]coreplugin.Handler{name: handler}
+	//nolint:gosec // test-only reflection to inject handler registry for startup hook verification
 	reflect.NewAt(v.Type(), unsafe.Pointer(v.UnsafeAddr())).Elem().Set(reflect.ValueOf(m))
 }
 

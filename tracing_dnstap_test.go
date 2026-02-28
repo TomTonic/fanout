@@ -53,6 +53,7 @@ func injectDnstapIO(t *testing.T, plugin *dnstap.Dnstap, io *dnstapIOStub) {
 	require.True(t, ioField.CanAddr())
 	require.True(t, reflect.ValueOf(io).Type().AssignableTo(ioField.Type()))
 
+	//nolint:gosec // test-only reflection to inject dnstap IO stub into unexported field
 	reflect.NewAt(ioField.Type(), unsafe.Pointer(ioField.UnsafeAddr())).Elem().Set(reflect.ValueOf(io))
 }
 

@@ -345,6 +345,7 @@ func TestServeDNS_TLS(t *testing.T) {
 
 	// Client with TLS
 	clientTLSConfig := &tls.Config{
+		//nolint:gosec // test-only self-signed cert in local integration test
 		InsecureSkipVerify: true,
 	}
 	c := NewClient(ln.Addr().String(), TCPTLS)
@@ -410,7 +411,7 @@ func TestClient_SetTLSConfig(t *testing.T) {
 	c := NewClient("127.0.0.1:53", "udp")
 	require.Equal(t, "udp", c.Net())
 
-	tlsCfg := &tls.Config{InsecureSkipVerify: true}
+	tlsCfg := &tls.Config{}
 	c.SetTLSConfig(tlsCfg)
 	require.Equal(t, TCPTLS, c.Net(), "SetTLSConfig should switch network to tcp-tls")
 }
