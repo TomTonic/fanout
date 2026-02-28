@@ -19,7 +19,7 @@ package fanout
 import (
 	"math/rand"
 
-	"github.com/networkservicemesh/fanout/internal/selector"
+	"github.com/TomTonic/fanout/internal/selector"
 )
 
 type policy interface {
