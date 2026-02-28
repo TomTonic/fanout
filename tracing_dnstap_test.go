@@ -114,6 +114,84 @@ func TestToDnstap_QueryAndResponseWithRawMessage(t *testing.T) {
 	require.NotEmpty(t, respTap.ResponseMessage)
 }
 
+// TestToDnstap_DoHEndpoint verifies that toDnstap correctly handles DoH URL-style endpoints
+// (e.g. "https://dns.google/dns-query") without crashing. Previously, net.SplitHostPort
+// would fail on URLs, producing a nil IP address.
+func TestToDnstap_DoHEndpoint(t *testing.T) {
+	tapPlugin := &dnstap.Dnstap{IncludeRawMessage: false}
+	io := &dnstapIOStub{}
+	injectDnstapIO(t, tapPlugin, io)
+
+	query := new(dns.Msg)
+	query.SetQuestion("example.org.", dns.TypeA)
+
+	state := &request.Request{Req: query}
+	client := &dnstapClientStub{addr: "https://8.8.8.8/dns-query", net: DOH}
+
+	toDnstap(tapPlugin, client, state, nil, time.Now())
+
+	require.Len(t, io.msgs, 1)
+	require.NotNil(t, io.msgs[0].Message)
+	require.Equal(t, tap.Message_FORWARDER_QUERY, *io.msgs[0].Message.Type)
+}
+
+// TestParseEndpoint verifies that parseEndpoint correctly extracts host and port from
+// various endpoint formats: host:port (plain DNS, DoT, DoQ), URLs (DoH, DoH3), and
+// URLs with explicit ports.
+func TestParseEndpoint(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+		wantHost string
+		wantPort string
+	}{
+		{name: "host:port", endpoint: "127.0.0.1:53", wantHost: "127.0.0.1", wantPort: "53"},
+		{name: "DoT host:port", endpoint: "dns.example.com:853", wantHost: "dns.example.com", wantPort: "853"},
+		{name: "HTTPS URL default port", endpoint: "https://dns.google/dns-query", wantHost: "dns.google", wantPort: "443"},
+		{name: "HTTPS URL explicit port", endpoint: "https://dns.google:8443/dns-query", wantHost: "dns.google", wantPort: "8443"},
+		{name: "HTTPS URL with IP", endpoint: "https://8.8.8.8/dns-query", wantHost: "8.8.8.8", wantPort: "443"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			host, port := parseEndpoint(tc.endpoint)
+			require.Equal(t, tc.wantHost, host)
+			require.Equal(t, tc.wantPort, port)
+		})
+	}
+}
+
+// TestEndpointToAddr verifies that endpointToAddr returns the correct net.Addr type
+// based on the network type: TCP-based protocols (TCP, TLS, DoH, DoH3) return *net.TCPAddr,
+// while UDP-based protocols (UDP, DoQ) return *net.UDPAddr.
+func TestEndpointToAddr(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+		network  string
+		wantType string
+		wantPort int
+	}{
+		{name: "UDP plain", endpoint: "127.0.0.1:53", network: UDP, wantType: "*net.UDPAddr", wantPort: 53},
+		{name: "TCP plain", endpoint: "127.0.0.1:53", network: TCP, wantType: "*net.TCPAddr", wantPort: 53},
+		{name: "DoT", endpoint: "127.0.0.1:853", network: TCPTLS, wantType: "*net.TCPAddr", wantPort: 853},
+		{name: "DoH URL", endpoint: "https://8.8.8.8/dns-query", network: DOH, wantType: "*net.TCPAddr", wantPort: 443},
+		{name: "DoH3 URL", endpoint: "https://8.8.8.8/dns-query", network: DOH3, wantType: "*net.TCPAddr", wantPort: 443},
+		{name: "DoQ", endpoint: "127.0.0.1:853", network: DOQ, wantType: "*net.UDPAddr", wantPort: 853},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			addr := endpointToAddr(tc.endpoint, tc.network)
+			require.Equal(t, tc.wantType, reflect.TypeOf(addr).String())
+			switch a := addr.(type) {
+			case *net.TCPAddr:
+				require.Equal(t, tc.wantPort, a.Port)
+			case *net.UDPAddr:
+				require.Equal(t, tc.wantPort, a.Port)
+			}
+		})
+	}
+}
+
 // TestWithRequestSpan_WithParentSpan verifies that during request forwarding, withRequestSpan
 // creates an OpenTracing child span for the upstream request. When a parent span exists in the
 // context, it creates a "request" child span tagged with the peer address and finishes it on cleanup.
