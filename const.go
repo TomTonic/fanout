@@ -44,4 +44,6 @@ const (
 	UDP = "udp"
 	// DOH net type for a DNS-over-HTTPS Client (RFC 8484).
 	DOH = "dns-over-https"
+	// DOH3 net type for a DNS-over-HTTPS Client using HTTP/3 over QUIC (RFC 8484 + RFC 9114).
+	DOH3 = "dns-over-https3"
 )

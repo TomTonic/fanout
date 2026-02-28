@@ -39,6 +39,7 @@ const dohMaxResponseSize = 64 * 1024
 // It uses HTTP POST with the application/dns-message content type.
 type dohClient struct {
 	endpoint   string // full URL, e.g. "https://dns.google/dns-query"
+	netType    string // DOH or DOH3
 	httpClient *http.Client
 }
 
@@ -51,6 +52,15 @@ func NewDoHClient(endpoint string) Client {
 
 // newDoHClientWithTLS creates a DoH client with an optional TLS configuration override.
 func newDoHClientWithTLS(endpoint string, tlsConfig *tls.Config) Client {
+	return &dohClient{
+		endpoint:   endpoint,
+		netType:    DOH,
+		httpClient: newHTTP2Client(tlsConfig),
+	}
+}
+
+// newHTTP2Client creates an http.Client backed by an HTTP/2-capable transport.
+func newHTTP2Client(tlsConfig *tls.Config) *http.Client {
 	if tlsConfig == nil {
 		tlsConfig = &tls.Config{
 			MinVersion: tls.VersionTLS12,
@@ -66,12 +76,9 @@ func newDoHClientWithTLS(endpoint string, tlsConfig *tls.Config) Client {
 			Timeout: dialTimeout,
 		}).DialContext,
 	}
-	return &dohClient{
-		endpoint: endpoint,
-		httpClient: &http.Client{
-			Transport: tr,
-			Timeout:   readTimeout + dialTimeout,
-		},
+	return &http.Client{
+		Transport: tr,
+		Timeout:   readTimeout + dialTimeout,
 	}
 }
 
@@ -97,7 +104,7 @@ func (c *dohClient) SetTLSConfig(cfg *tls.Config) {
 
 // Net returns the network type identifier for this client.
 func (c *dohClient) Net() string {
-	return DOH
+	return c.netType
 }
 
 // Endpoint returns the DoH server URL.
@@ -109,7 +116,14 @@ func (c *dohClient) Endpoint() string {
 // The DNS message is serialized in wire format, sent with content-type
 // application/dns-message, and the response is deserialized from wire format.
 func (c *dohClient) Request(ctx context.Context, r *request.Request) (*dns.Msg, error) {
-	ctx, finish := withRequestSpan(ctx, c.endpoint)
+	return dohRoundTrip(ctx, c.httpClient, c.endpoint, r)
+}
+
+// dohRoundTrip performs a DNS-over-HTTPS round trip using the given http.Client.
+// It packs the DNS request to wire format, sends it as an HTTP POST, validates
+// the response, and unpacks the DNS reply. Shared by both DoH (HTTP/2) and DoH3 (HTTP/3).
+func dohRoundTrip(ctx context.Context, httpClient *http.Client, endpoint string, r *request.Request) (*dns.Msg, error) {
+	ctx, finish := withRequestSpan(ctx, endpoint)
 	defer finish()
 	start := time.Now()
 
@@ -118,14 +132,14 @@ func (c *dohClient) Request(ctx context.Context, r *request.Request) (*dns.Msg, 
 		return nil, errors.Wrap(err, "failed to pack DNS request for DoH")
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(msg))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(msg))
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create DoH HTTP request")
 	}
 	httpReq.Header.Set("Content-Type", "application/dns-message")
 	httpReq.Header.Set("Accept", "application/dns-message")
 
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := httpClient.Do(httpReq)
 	if err != nil {
 		return nil, errors.Wrap(err, "DoH HTTP request failed")
 	}
@@ -157,9 +171,9 @@ func (c *dohClient) Request(ctx context.Context, r *request.Request) (*dns.Msg, 
 	if !ok {
 		rc = fmt.Sprint(ret.Rcode)
 	}
-	RequestCount.WithLabelValues(c.endpoint).Add(1)
-	RcodeCount.WithLabelValues(rc, c.endpoint).Add(1)
-	RequestDuration.WithLabelValues(c.endpoint).Observe(time.Since(start).Seconds())
+	RequestCount.WithLabelValues(endpoint).Add(1)
+	RcodeCount.WithLabelValues(rc, endpoint).Add(1)
+	RequestDuration.WithLabelValues(endpoint).Observe(time.Since(start).Seconds())
 
 	return ret, nil
 }
