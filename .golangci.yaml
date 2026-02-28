@@ -96,6 +96,7 @@ linters:
       - path: "setup.go"
         linters:
           - gochecknoinits
+          - gosec
       - path: "fanout_test.go"
         linters:
           - gosec

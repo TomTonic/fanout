@@ -48,6 +48,6 @@ func isBetter(left, right *response) bool {
 	if left.response == nil {
 		return true
 	}
-	return left.response.MsgHdr.Rcode != dns.RcodeSuccess &&
-		right.response.MsgHdr.Rcode == dns.RcodeSuccess
+	return left.response.Rcode != dns.RcodeSuccess &&
+		right.response.Rcode == dns.RcodeSuccess
 }
