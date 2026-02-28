@@ -39,6 +39,10 @@ func setConfigRegistryHandler(t *testing.T, cfg *dnsserver.Config, name string, 
 	reflect.NewAt(v.Type(), unsafe.Pointer(v.UnsafeAddr())).Elem().Set(reflect.ValueOf(m))
 }
 
+// TestSetup_RegistersPluginAndLifecycleHooks verifies that during plugin registration (setup()),
+// the fanout plugin adds itself to the CoreDNS plugin chain and registers OnStartup / OnShutdown hooks.
+// Asserts that after setup(), exactly one plugin function is registered, startup/shutdown hook counts
+// each increased by one, and the plugin function wraps the next handler correctly as a *Fanout instance.
 func TestSetup_RegistersPluginAndLifecycleHooks(t *testing.T) {
 	c := caddy.NewTestController("dns", "fanout . 127.0.0.1")
 	cfg := dnsserver.GetConfig(c)
@@ -65,6 +69,10 @@ func TestSetup_RegistersPluginAndLifecycleHooks(t *testing.T) {
 	require.NotNil(t, f.Next)
 }
 
+// TestSetup_OnStartupBindsDnstapPluginFromRegistry verifies that during OnStartup, if a dnstap
+// plugin is registered in the server config registry, fanout binds it to f.TapPlugin for DNS tap
+// logging. Injects a dnstap.Dnstap into the config registry, runs the startup hooks, and asserts
+// f.TapPlugin points to the injected instance.
 func TestSetup_OnStartupBindsDnstapPluginFromRegistry(t *testing.T) {
 	c := caddy.NewTestController("dns", "fanout . 127.0.0.1")
 	cfg := dnsserver.GetConfig(c)
@@ -93,6 +101,9 @@ func TestSetup_OnStartupBindsDnstapPluginFromRegistry(t *testing.T) {
 	require.Same(t, tapPlugin, f.TapPlugin)
 }
 
+// TestSetup_ReturnsErrorWhenTooManyUpstreams verifies that during plugin registration,
+// configuring more than 100 upstream servers produces an error ("more than 100 TOs configured").
+// Generates 101 IPs and verifies setup() rejects the configuration.
 func TestSetup_ReturnsErrorWhenTooManyUpstreams(t *testing.T) {
 	hosts := make([]string, 0, maxIPCount+1)
 	for i := 1; i <= maxIPCount+1; i++ {

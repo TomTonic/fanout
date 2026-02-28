@@ -21,6 +21,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestSimple_Pick verifies the Sequential selector used by the "sequential" server selection policy
+// during request distribution. Elements are returned in insertion order.
+// Tests three scenarios: picking all elements returns them in order, picking fewer returns the first N,
+// and picking more than available returns zero-values for excess picks.
 func TestSimple_Pick(t *testing.T) {
 	testCases := map[string]struct {
 		values []string

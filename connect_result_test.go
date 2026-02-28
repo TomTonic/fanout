@@ -8,6 +8,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestIsBetter verifies the response-ranking logic used when the fanout plugin collects answers
+// from multiple upstream servers concurrently. isBetter(left, right) decides whether right is a
+// better result than left: success beats error, error beats nil, NXDOMAIN loses to success.
+// This table-driven test covers 16 combinations of nil, error, nil-message, NXDOMAIN, and success
+// responses, ensuring the plugin always selects the most useful answer to return to the client.
 func TestIsBetter(t *testing.T) {
 	okResponse := &response{
 		response: &dns.Msg{MsgHdr: dns.MsgHdr{Rcode: dns.RcodeSuccess}},

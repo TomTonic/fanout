@@ -111,6 +111,9 @@ type fanoutTestSuite struct {
 	network string
 }
 
+// TestFanout_ExceptFile verifies that the except-file Corefile directive reads domain names from
+// a file and populates the exclusion list. Writes two domains to a temp file, parses a Corefile
+// referencing it, and asserts both domains appear in ExcludeDomains.
 func TestFanout_ExceptFile(t *testing.T) {
 	file, err := os.CreateTemp(os.TempDir(), t.Name())
 	exclude := []string{"example1.com.", "example2.com."}
@@ -131,6 +134,9 @@ func TestFanout_ExceptFile(t *testing.T) {
 	}
 }
 
+// TestConfigFromCorefile is an end-to-end integration test from Corefile parsing through ServeDNS.
+// Parses a Corefile with "fanout . <addr> { NETWORK <net> }", starts the plugin lifecycle (OnStartup),
+// sends a query, and asserts the correct answer is returned. Runs for both UDP and TCP via the suite.
 func (t *fanoutTestSuite) TestConfigFromCorefile() {
 	defer goleak.VerifyNone(t.T())
 	s := newServer(t.network, func(w dns.ResponseWriter, r *dns.Msg) {
@@ -161,6 +167,9 @@ func (t *fanoutTestSuite) TestConfigFromCorefile() {
 	t.Equal(rec.Msg.Answer[0].Header().Name, "example.org.")
 }
 
+// TestWorkerCountLessThenServers verifies that WorkerCount limits concurrent upstream queries.
+// Sets up 5 servers but WorkerCount=1, so only one server is contacted per query.
+// Asserts exactly one answer is produced and no extra goroutines leak.
 func (t *fanoutTestSuite) TestWorkerCountLessThenServers() {
 	defer goleak.VerifyNone(t.T())
 	const expected = 1
@@ -208,6 +217,10 @@ func (t *fanoutTestSuite) TestWorkerCountLessThenServers() {
 	defer mutex.Unlock()
 	t.Equal(answerCount, expected)
 }
+
+// TestTwoServersUnsuccessfulResponse verifies that when one server returns non-success codes
+// (cycling through all rcodes) and the other returns success, the plugin always prefers the
+// successful response. Sends 10 queries and asserts every written answer has RcodeSuccess.
 func (t *fanoutTestSuite) TestTwoServersUnsuccessfulResponse() {
 	defer goleak.VerifyNone(t.T())
 	rcode := 1
@@ -253,6 +266,9 @@ func (t *fanoutTestSuite) TestTwoServersUnsuccessfulResponse() {
 	}
 }
 
+// TestCanReturnUnsuccessfulRepose verifies that when all upstream servers return NXDOMAIN and
+// there is no successful answer to prefer, the plugin still forwards the first negative response
+// to the client rather than producing an error.
 func (t *fanoutTestSuite) TestCanReturnUnsuccessfulRepose() {
 	defer goleak.VerifyNone(t.T())
 	s := newServer(t.network, func(w dns.ResponseWriter, r *dns.Msg) {
@@ -275,6 +291,9 @@ func (t *fanoutTestSuite) TestCanReturnUnsuccessfulRepose() {
 	t.Equal(writer.answers[0].Rcode, dns.RcodeNameError, "fanout plugin returns first negative answer if other answers on request are negative")
 }
 
+// TestBusyServer verifies the retry loop during request forwarding with Attempts=0 (infinite retries).
+// A server that drops every other request should eventually answer all queries.
+// Sends 5 queries and asserts that 5 successful answers are received.
 func (t *fanoutTestSuite) TestBusyServer() {
 	defer goleak.VerifyNone(t.T())
 	var requestNum, answerCount int32
@@ -307,6 +326,9 @@ func (t *fanoutTestSuite) TestBusyServer() {
 	t.Equal(totalRequestNum, atomic.LoadInt32(&answerCount))
 }
 
+// TestTwoServers verifies that each query reaches the correct upstream: server 1 answers
+// "example1.", server 2 answers "example2.". After both queries, each server has been
+// contacted exactly once, confirming fanout routes to all configured upstreams.
 func (t *fanoutTestSuite) TestTwoServers() {
 	defer goleak.VerifyNone(t.T())
 	const expected = 1
@@ -363,6 +385,9 @@ func (t *fanoutTestSuite) TestTwoServers() {
 	t.Equal(answerCount2, expected)
 }
 
+// TestServerCount verifies that serverCount caps the number of upstreams polled per query.
+// With serverCount=1 and a WeightedPolicy, only one of two servers should be contacted.
+// Asserts exactly one answer is produced.
 func (t *fanoutTestSuite) TestServerCount() {
 	defer goleak.VerifyNone(t.T())
 	const expected = 1
@@ -410,9 +435,12 @@ func (t *fanoutTestSuite) TestServerCount() {
 	mutex.Unlock()
 }
 
+// TestFanoutUDPSuite runs the full fanoutTestSuite over UDP.
 func TestFanoutUDPSuite(t *testing.T) {
 	suite.Run(t, &fanoutTestSuite{network: UDP})
 }
+
+// TestFanoutTCPSuite runs the full fanoutTestSuite over TCP.
 func TestFanoutTCPSuite(t *testing.T) {
 	suite.Run(t, &fanoutTestSuite{network: TCP})
 }

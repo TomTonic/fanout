@@ -56,6 +56,9 @@ func injectDnstapIO(t *testing.T, plugin *dnstap.Dnstap, io *dnstapIOStub) {
 	reflect.NewAt(ioField.Type(), unsafe.Pointer(ioField.UnsafeAddr())).Elem().Set(reflect.ValueOf(io))
 }
 
+// TestToDnstap_QueryOnlyWithoutRawMessage verifies dnstap message emission during response handling.
+// When IncludeRawMessage is false and no reply is provided, toDnstap must emit exactly one message
+// of type FORWARDER_QUERY with an empty QueryMessage field.
 func TestToDnstap_QueryOnlyWithoutRawMessage(t *testing.T) {
 	tapPlugin := &dnstap.Dnstap{IncludeRawMessage: false}
 	io := &dnstapIOStub{}
@@ -76,6 +79,9 @@ func TestToDnstap_QueryOnlyWithoutRawMessage(t *testing.T) {
 	require.Empty(t, io.msgs[0].Message.QueryMessage)
 }
 
+// TestToDnstap_QueryAndResponseWithRawMessage verifies that when IncludeRawMessage is true and
+// a reply is provided, toDnstap emits two messages: a FORWARDER_QUERY with the packed query bytes
+// and a FORWARDER_RESPONSE with the packed response bytes.
 func TestToDnstap_QueryAndResponseWithRawMessage(t *testing.T) {
 	tapPlugin := &dnstap.Dnstap{IncludeRawMessage: true}
 	io := &dnstapIOStub{}
@@ -107,6 +113,9 @@ func TestToDnstap_QueryAndResponseWithRawMessage(t *testing.T) {
 	require.NotEmpty(t, respTap.ResponseMessage)
 }
 
+// TestWithRequestSpan_WithParentSpan verifies that during request forwarding, withRequestSpan
+// creates an OpenTracing child span for the upstream request. When a parent span exists in the
+// context, it creates a "request" child span tagged with the peer address and finishes it on cleanup.
 func TestWithRequestSpan_WithParentSpan(t *testing.T) {
 	tracer := mocktracer.New()
 	parent := tracer.StartSpan("parent")
@@ -132,6 +141,8 @@ func TestWithRequestSpan_WithParentSpan(t *testing.T) {
 	require.Equal(t, "8.8.8.8:53", requestSpan.Tag("peer.address"))
 }
 
+// TestWithRequestSpan_WithoutParentSpan verifies that when no parent span exists in the context,
+// withRequestSpan returns the original context unchanged and a no-op finish function without panicking.
 func TestWithRequestSpan_WithoutParentSpan(t *testing.T) {
 	ctx := context.Background()
 	ctx2, finish := withRequestSpan(ctx, "8.8.4.4:53")
@@ -140,6 +151,9 @@ func TestWithRequestSpan_WithoutParentSpan(t *testing.T) {
 	require.NotPanics(t, finish)
 }
 
+// TestTransportDial_WithTracingSpan verifies that during upstream connection establishment,
+// transportImpl.dial creates a "connect" tracing span when a parent span is present.
+// After dialing a real UDP listener, asserts that a finished "connect" span exists in the tracer.
 func TestTransportDial_WithTracingSpan(t *testing.T) {
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	require.NoError(t, err)
