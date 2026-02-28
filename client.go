@@ -75,6 +75,12 @@ func (c *client) Endpoint() string {
 	return c.addr
 }
 
+// Close releases resources held by this client (drains the connection pool).
+func (c *client) Close() error {
+	c.transport.Close()
+	return nil
+}
+
 // Request sends request to DNS server
 func (c *client) Request(ctx context.Context, r *request.Request) (*dns.Msg, error) {
 	ctx, finish := withRequestSpan(ctx, c.addr)

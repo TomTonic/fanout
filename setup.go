@@ -19,6 +19,7 @@
 package fanout
 
 import (
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -77,8 +78,13 @@ func (f *Fanout) OnStartup() (err error) {
 	return nil
 }
 
-// OnShutdown stops all configured clients.
+// OnShutdown stops all configured clients and releases their resources.
 func (f *Fanout) OnShutdown() error {
+	for _, c := range f.clients {
+		if cl, ok := c.(io.Closer); ok {
+			_ = cl.Close()
+		}
+	}
 	return nil
 }
 
