@@ -2,6 +2,7 @@ package fanout
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/coredns/coredns/plugin/test"
@@ -37,4 +38,31 @@ func TestUseRequestSizeOnConn(t *testing.T) {
 	d, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
 	require.Nil(t, err)
 	require.Len(t, d.Answer, 3)
+}
+
+// TestClampUDPSize verifies that clampUDPSize restricts the UDP buffer size
+// to the valid DNS range [512, 65535], clamping values outside those bounds.
+func TestClampUDPSize(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    int
+		expected uint16
+	}{
+		{name: "below-minimum-zero", input: 0, expected: 512},
+		{name: "below-minimum-small", input: 100, expected: 512},
+		{name: "at-minimum", input: 512, expected: 512},
+		{name: "typical-edns", input: 4096, expected: 4096},
+		{name: "default-msg-size", input: 1232, expected: 1232},
+		{name: "at-maximum", input: math.MaxUint16, expected: math.MaxUint16},
+		{name: "above-maximum", input: math.MaxUint16 + 1, expected: math.MaxUint16},
+		{name: "way-above-maximum", input: math.MaxInt32, expected: math.MaxUint16},
+		{name: "negative", input: -1, expected: 512},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := clampUDPSize(tc.input)
+			require.Equal(t, tc.expected, result)
+		})
+	}
 }
