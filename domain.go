@@ -52,6 +52,9 @@ func (l *domain) IsFinal() bool {
 
 // Contains parses string and check is domains contains
 func (l *domain) Contains(s string) bool {
+	if s == "" {
+		return false
+	}
 	end := len(s)
 	var curr Domain = l
 	for start := strings.LastIndex(s, "."); start != -1; start = strings.LastIndex(s[:start], ".") {
@@ -77,8 +80,12 @@ func (l *domain) Contains(s string) bool {
 	return curr.IsFinal()
 }
 
-// AddString parses string and adds child domains
+// AddString parses string and adds child domains.
+// Empty strings are ignored.
 func (l *domain) AddString(s string) {
+	if s == "" {
+		return
+	}
 	end := len(s)
 	var curr = Domain(l)
 	for start := strings.LastIndex(s, "."); start != -1; start = strings.LastIndex(s[:start], ".") {

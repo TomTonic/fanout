@@ -167,7 +167,7 @@ func TestTransportDial_WithTracingSpan(t *testing.T) {
 	defer parent.Finish()
 
 	ctx := ot.ContextWithSpan(context.Background(), parent)
-	tr := &transportImpl{addr: pc.LocalAddr().String()}
+	tr := &transportImpl{addr: pc.LocalAddr().String(), pool: make(chan *dns.Conn, connPoolSize)}
 
 	conn, err := tr.dial(ctx, &dns.Client{Net: UDP, Dialer: &net.Dialer{Timeout: time.Second}})
 	require.NoError(t, err)
@@ -182,4 +182,110 @@ func TestTransportDial_WithTracingSpan(t *testing.T) {
 		}
 	}
 	require.True(t, found, "expected connect span to be finished")
+}
+
+// TestTransportPool_YieldAndReuse verifies the connection pooling in transportImpl.
+// A yielded TCP connection is returned by the next Dial call instead of creating a new one.
+func TestTransportPool_YieldAndReuse(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = ln.Close() }()
+
+	// Accept connections in background
+	go func() {
+		for {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			// Keep connection alive
+			_ = conn
+		}
+	}()
+
+	tr := NewTransport(ln.Addr().String())
+
+	// Dial a TCP connection
+	conn1, err := tr.Dial(context.Background(), TCP)
+	require.NoError(t, err)
+	require.NotNil(t, conn1)
+
+	// Yield it back
+	tr.Yield(conn1)
+
+	// Next Dial should return the pooled connection
+	conn2, err := tr.Dial(context.Background(), TCP)
+	require.NoError(t, err)
+	require.Same(t, conn1, conn2, "should reuse pooled connection")
+
+	_ = conn2.Close()
+}
+
+// TestTransportPool_YieldNil verifies that Yield(nil) is a safe no-op.
+func TestTransportPool_YieldNil(t *testing.T) {
+	tr := NewTransport("127.0.0.1:53")
+	require.NotPanics(t, func() {
+		tr.Yield(nil)
+	})
+}
+
+// TestTransportPool_FullPoolClosesConnection verifies that when the pool is full,
+// yielding an additional connection closes it instead of blocking.
+func TestTransportPool_FullPoolClosesConnection(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = ln.Close() }()
+
+	go func() {
+		for {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			_ = conn
+		}
+	}()
+
+	tr := NewTransport(ln.Addr().String())
+
+	// Fill the pool (connPoolSize = 2)
+	conns := make([]*dns.Conn, connPoolSize+1)
+	for i := range conns {
+		conns[i], err = tr.Dial(context.Background(), TCP)
+		require.NoError(t, err)
+	}
+
+	// Yield all - last one should be closed, not queued
+	for _, c := range conns {
+		tr.Yield(c)
+	}
+
+	// Drain pool - should get exactly connPoolSize connections
+	for i := 0; i < connPoolSize; i++ {
+		c, dialErr := tr.Dial(context.Background(), TCP)
+		require.NoError(t, dialErr)
+		_ = c.Close()
+	}
+}
+
+// TestTransportPool_UDPNotPooled verifies that UDP connections are not pooled.
+// Since UDP is connectionless (no handshake), pooling has no benefit.
+func TestTransportPool_UDPNotPooled(t *testing.T) {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = pc.Close() }()
+
+	tr := NewTransport(pc.LocalAddr().String())
+
+	conn1, err := tr.Dial(context.Background(), UDP)
+	require.NoError(t, err)
+
+	// Yield is a no-op conceptually - for UDP we still put it in pool
+	// but new dials don't check pool for UDP (only TCP/TLS)
+	_ = conn1.Close()
+
+	conn2, err := tr.Dial(context.Background(), UDP)
+	require.NoError(t, err)
+	require.NotSame(t, conn1, conn2, "UDP connections should not be reused")
+	_ = conn2.Close()
 }

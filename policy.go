@@ -17,8 +17,6 @@
 package fanout
 
 import (
-	"math/rand"
-
 	"github.com/TomTonic/fanout/internal/selector"
 )
 
@@ -42,10 +40,9 @@ func (p *SequentialPolicy) selector(clients []Client) clientSelector {
 // WeightedPolicy is used to select clients randomly based on its loadFactor (weights)
 type WeightedPolicy struct {
 	loadFactor []int
-	r          *rand.Rand
 }
 
 // creates new weighted random selector of provided clients based on loadFactor
 func (p *WeightedPolicy) selector(clients []Client) clientSelector {
-	return selector.NewWeightedRandSelector(clients, p.loadFactor, p.r)
+	return selector.NewWeightedRandSelector(clients, p.loadFactor)
 }

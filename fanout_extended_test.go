@@ -354,9 +354,7 @@ func TestServeDNS_TLS(t *testing.T) {
 	f := New()
 	f.From = "."
 	f.net = TCPTLS
-	f.clients = append(f.clients, c)
-	f.WorkerCount = 1
-	f.serverCount = 1
+	f.AddClient(c)
 
 	req := new(dns.Msg)
 	req.SetQuestion(testQuery, dns.TypeA)
