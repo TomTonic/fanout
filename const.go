@@ -36,14 +36,16 @@ const (
 	// while waiting for one whose ID matches the request. This guards against a malicious or
 	// misbehaving upstream that sends many responses with wrong IDs.
 	maxReadLoopIterations = 100
-	// TCPTLS net type for a Client.
+	// TCPTLS net type for a DNS-over-TLS Client (DoT, RFC 7858).
 	TCPTLS = "tcp-tls"
-	// TCP net type for a Client.
+	// TCP net type for a Client (plain DNS over TCP).
 	TCP = "tcp"
-	// UDP net type for a Client.
+	// UDP net type for a Client (plain DNS over UDP).
 	UDP = "udp"
-	// DOH net type for a DNS-over-HTTPS Client (RFC 8484).
+	// DOH net type for a DNS-over-HTTPS Client (DoH, RFC 8484 over HTTP/2).
 	DOH = "dns-over-https"
-	// DOH3 net type for a DNS-over-HTTPS Client using HTTP/3 over QUIC (RFC 8484 + RFC 9114).
+	// DOH3 net type for a DNS-over-HTTPS Client using HTTP/3 over QUIC (DoH3, RFC 8484 + RFC 9114).
 	DOH3 = "dns-over-https3"
+	// DOQ net type for a DNS-over-QUIC Client (DoQ, RFC 9250).
+	DOQ = "dns-over-quic"
 )
