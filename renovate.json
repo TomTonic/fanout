@@ -1,0 +1,72 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits",
+    ":automergeDigest",
+    "group:allNonMajor"
+  ],
+  "labels": [
+    "dependencies",
+    "renovate"
+  ],
+  "rebaseWhen": "behind-base-branch",
+  "rangeStrategy": "bump",
+  "enabledManagers": [
+    "gomod",
+    "github-actions",
+    "dockerfile",
+    "regex"
+  ],
+  "ignorePaths": [
+    "**/vendor/**"
+  ],
+  "postUpdateOptions": [
+    "gomodTidy"
+  ],
+  "packageRules": [
+    {
+      "matchManagers": [
+        "github-actions"
+      ],
+      "groupName": "github actions"
+    },
+    {
+      "matchManagers": [
+        "gomod"
+      ],
+      "groupName": "go modules"
+    },
+    {
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "groupName": "docker images"
+    },
+    {
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "labels": [
+        "dependencies",
+        "major-update"
+      ]
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Track GO_VERSION in GitHub workflows",
+      "managerFilePatterns": [
+        "/^\\.github\\/workflows\\/.*\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "GO_VERSION:\\s*'?(?<currentValue>\\d+\\.\\d+)'?"
+      ],
+      "depNameTemplate": "go",
+      "datasourceTemplate": "golang-version",
+      "versioningTemplate": "semver"
+    }
+  ]
+}
