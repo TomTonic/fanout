@@ -21,7 +21,6 @@ package fanout
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"net"
 	"os"
 	"strings"
@@ -416,8 +415,6 @@ func (t *fanoutTestSuite) TestServerCount() {
 	f := New()
 	f.ServerSelectionPolicy = &WeightedPolicy{
 		loadFactor: []int{50, 100},
-		//nolint:gosec // init rand with constant seed to get predefined result
-		r: rand.New(rand.NewSource(1)),
 	}
 	f.net = t.network
 	f.From = "."

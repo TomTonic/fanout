@@ -16,70 +16,51 @@
 package selector
 
 import (
-	"math/rand"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
-// TestWeightedRand_Pick verifies the WeightedRand selector used by the "weighted-random" server
-// selection policy during request distribution. Elements are picked randomly proportional to their
-// weights, without replacement. Uses a fixed random seed for deterministic results.
-// Tests five scenarios: same/different weights with all/some/excess picks.
-// Verifies the exact pick order matches the expected sequence for the given seed.
+// TestWeightedRand_Pick verifies the WeightedRand selector picks elements without replacement.
+// Since rand/v2 uses a non-seedable global source, we verify set membership rather than order.
 func TestWeightedRand_Pick(t *testing.T) {
 	testCases := map[string]struct {
 		values  []string
 		weights []int
-
-		picksCount int
-
-		expected []string
+		picks   int
+		excess  int // picks beyond len(values) that should return ""
 	}{
-		"pick_all_same_weight": {
-			values:     []string{"a", "b", "c", "d", "e", "f", "g"},
-			weights:    []int{100, 100, 100, 100, 100, 100, 100},
-			picksCount: 7,
-			expected:   []string{"b", "a", "d", "f", "g", "c", "e"},
-		},
-		"pick_all_different_weight": {
-			values:     []string{"a", "b", "c", "d", "e", "f", "g"},
-			weights:    []int{100, 70, 10, 50, 100, 30, 50},
-			picksCount: 7,
-			expected:   []string{"d", "a", "e", "b", "g", "c", "f"},
-		},
-		"pick_some_same_weight": {
-			values:     []string{"a", "b", "c", "d", "e", "f", "g"},
-			weights:    []int{100, 100, 100, 100, 100, 100, 100},
-			picksCount: 3,
-			expected:   []string{"b", "a", "d"},
-		},
-		"pick_some_different_weight": {
-			values:     []string{"a", "b", "c", "d", "e", "f", "g"},
-			weights:    []int{100, 70, 10, 50, 100, 30, 50},
-			picksCount: 3,
-			expected:   []string{"d", "a", "e"},
-		},
-		"pick_more_than_available": {
-			values:     []string{"a", "b", "c"},
-			weights:    []int{70, 10, 100},
-			picksCount: 4,
-			expected:   []string{"a", "c", "b", ""},
-		},
+		"all_same_weight":      {[]string{"a", "b", "c", "d", "e"}, []int{100, 100, 100, 100, 100}, 5, 0},
+		"all_different_weight": {[]string{"a", "b", "c"}, []int{100, 70, 10}, 3, 0},
+		"pick_some":            {[]string{"a", "b", "c", "d", "e"}, []int{100, 100, 100, 100, 100}, 3, 0},
+		"more_than_available":  {[]string{"a", "b", "c"}, []int{70, 10, 100}, 4, 1},
 	}
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
-			//nolint:gosec // init rand with constant seed to get predefined result
-			r := rand.New(rand.NewSource(1))
-
-			wrs := NewWeightedRandSelector(tc.values, tc.weights, r)
-
-			actual := make([]string, 0, tc.picksCount)
-			for i := 0; i < tc.picksCount; i++ {
-				actual = append(actual, wrs.Pick())
+			wrs := NewWeightedRandSelector(tc.values, tc.weights)
+			picked, defaults := pickAll(wrs, tc.picks)
+			allowed := make(map[string]bool, len(tc.values))
+			for _, v := range tc.values {
+				allowed[v] = true
 			}
-
-			assert.Equal(t, tc.expected, actual)
+			for v := range picked {
+				assert.True(t, allowed[v], "picked value %q not in expected set", v)
+			}
+			assert.Equal(t, tc.picks-tc.excess, len(picked), "unexpected unique picks")
+			assert.Equal(t, tc.excess, defaults, "unexpected default picks")
 		})
 	}
+}
+
+// pickAll picks n elements from the selector, returning unique non-empty values and the count of empty (default) picks.
+func pickAll(wrs *WeightedRand[string], n int) (picked map[string]bool, defaults int) {
+	picked = make(map[string]bool)
+	for i := 0; i < n; i++ {
+		if v := wrs.Pick(); v == "" {
+			defaults++
+		} else {
+			picked[v] = true
+		}
+	}
+	return picked, defaults
 }

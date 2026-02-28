@@ -26,10 +26,16 @@ const (
 	policySequential     = "sequential"
 	maxWorkerCount       = 32
 	minWorkerCount       = 2
-	maxTimeout           = 2 * time.Second
+	dialTimeout          = 2 * time.Second
 	defaultTimeout       = 30 * time.Second
+	maxTimeout           = 5 * time.Minute
+	minTimeout           = 100 * time.Millisecond
 	readTimeout          = 2 * time.Second
-	attemptDelay         = time.Millisecond * 100
+	attemptDelay         = 100 * time.Millisecond
+	// maxReadLoopIterations is the maximum number of DNS response messages the client will read
+	// while waiting for one whose ID matches the request. This guards against a malicious or
+	// misbehaving upstream that sends many responses with wrong IDs.
+	maxReadLoopIterations = 100
 	// TCPTLS net type for a Client.
 	TCPTLS = "tcp-tls"
 	// TCP net type for a Client.

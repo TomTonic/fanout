@@ -38,14 +38,16 @@ var log = clog.NewWithPlugin("fanout")
 
 // Fanout represents a plugin instance that can do async requests to list of DNS servers.
 type Fanout struct {
-	clients               []Client
-	tlsConfig             *tls.Config
-	ExcludeDomains        Domain
-	tlsServerName         string
-	Timeout               time.Duration
-	Race                  bool
-	net                   string
-	From                  string
+	clients        []Client
+	tlsConfig      *tls.Config
+	ExcludeDomains Domain
+	tlsServerName  string
+	Timeout        time.Duration
+	Race           bool
+	net            string
+	From           string
+	// Attempts is the number of times to retry a failed upstream request.
+	// A value of 0 means infinite retries (bounded only by Timeout).
 	Attempts              int
 	WorkerCount           int
 	serverCount           int
@@ -68,11 +70,19 @@ func New() *Fanout {
 	}
 }
 
-// AddClient is used to add a new DNS server to the fanout
+// AddClient is used to add a new DNS server to the fanout.
+// It also increments WorkerCount and serverCount.
+// For bulk initialization during setup, use addClient instead.
 func (f *Fanout) AddClient(p Client) {
-	f.clients = append(f.clients, p)
+	f.addClient(p)
 	f.WorkerCount++
 	f.serverCount++
+}
+
+// addClient appends a client without modifying WorkerCount or serverCount.
+// Used during setup where these counters are set separately.
+func (f *Fanout) addClient(p Client) {
+	f.clients = append(f.clients, p)
 }
 
 // Name implements plugin.Handler.
@@ -188,7 +198,11 @@ func (f *Fanout) match(state *request.Request) bool {
 func (f *Fanout) processClient(ctx context.Context, c Client, r *request.Request) *response {
 	start := time.Now()
 	var err error
-	for j := 0; j < f.Attempts || f.Attempts == 0; <-time.After(attemptDelay) {
+	delayTimer := time.NewTimer(0)
+	defer delayTimer.Stop()
+	// Drain the initial timer fire so the first attempt runs immediately.
+	<-delayTimer.C
+	for j := 0; j < f.Attempts || f.Attempts == 0; {
 		if ctx.Err() != nil {
 			return &response{client: c, response: nil, start: start, err: ctx.Err()}
 		}
@@ -199,6 +213,12 @@ func (f *Fanout) processClient(ctx context.Context, c Client, r *request.Request
 		}
 		if f.Attempts != 0 {
 			j++
+		}
+		delayTimer.Reset(attemptDelay)
+		select {
+		case <-ctx.Done():
+			return &response{client: c, response: nil, start: start, err: ctx.Err()}
+		case <-delayTimer.C:
 		}
 	}
 	return &response{client: c, response: nil, start: start, err: errors.Wrapf(err, "attempt limit has been reached")}

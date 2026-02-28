@@ -10,9 +10,9 @@ import (
 )
 
 // TestParseErrors verifies argument validation during Corefile parsing for all configuration directives.
-// Table-driven test covering 13 invalid Corefile snippets: missing arguments for network, policy,
+// Table-driven test covering invalid Corefile snippets: missing arguments for network, policy,
 // timeout, tls-server, worker-count, except, race; too many TLS args; no upstream hosts; path escape
-// in except-file; unparseable timeout; invalid worker-count; and bad load-factor format.
+// in except-file; unparseable timeout; timeout out of range; invalid worker-count; and bad load-factor format.
 // Each case asserts that parseFanout returns an error containing the expected substring.
 func TestParseErrors(t *testing.T) {
 	tests := []struct {
@@ -31,6 +31,9 @@ func TestParseErrors(t *testing.T) {
 		{name: "err-no-to-hosts", input: "fanout .", expectedErr: "Wrong argument count"},
 		{name: "err-except-file-escape", input: "fanout . 127.0.0.1 {\nexcept-file ../file.txt\n}", expectedErr: "path must be local"},
 		{name: "err-timeout-parse", input: "fanout . 127.0.0.1 {\ntimeout asd\n}", expectedErr: "invalid duration"},
+		{name: "err-timeout-too-small", input: "fanout . 127.0.0.1 {\ntimeout 10ms\n}", expectedErr: "too small"},
+		{name: "err-timeout-negative", input: "fanout . 127.0.0.1 {\ntimeout -1s\n}", expectedErr: "too small"},
+		{name: "err-timeout-too-large", input: "fanout . 127.0.0.1 {\ntimeout 10m\n}", expectedErr: "too large"},
 		{name: "err-worker-count-parse", input: "fanout . 127.0.0.1 {\nworker-count \n}", expectedErr: "Wrong argument count"},
 		{name: "err-load-factor-parse", input: "fanout . 127.0.0.1 {\npolicy weighted-random \nweighted-random-load-factor asd\n}", expectedErr: "Wrong argument count"},
 	}

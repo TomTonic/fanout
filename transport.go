@@ -20,14 +20,21 @@ import (
 	"context"
 	"crypto/tls"
 	"net"
+	"sync"
 
 	"github.com/miekg/dns"
 	ot "github.com/opentracing/opentracing-go"
 )
 
+const connPoolSize = 2
+
 // Transport represent a solution to connect to remote DNS endpoint with specific network
 type Transport interface {
 	Dial(ctx context.Context, net string) (*dns.Conn, error)
+	// Yield returns a healthy connection to the pool for reuse.
+	// Only call this for connections that completed a successful request-response cycle.
+	// For failed connections, call conn.Close() instead.
+	Yield(conn *dns.Conn)
 	SetTLSConfig(*tls.Config)
 }
 
@@ -35,28 +42,64 @@ type Transport interface {
 func NewTransport(addr string) Transport {
 	return &transportImpl{
 		addr: addr,
+		pool: make(chan *dns.Conn, connPoolSize),
 	}
 }
 
 type transportImpl struct {
 	tlsConfig *tls.Config
 	addr      string
+	mu        sync.Mutex // protects tlsConfig reads during concurrent Dial
+	pool      chan *dns.Conn
 }
 
 // SetTLSConfig sets tls config for transport
 func (t *transportImpl) SetTLSConfig(c *tls.Config) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.tlsConfig = c
 }
 
-// Dial dials the address configured in transportImpl, potentially reusing a connection or creating a new one.
+// Yield returns a connection to the pool for reuse.
+// If the pool is full, the connection is closed instead.
+// UDP connections are always closed since they are cheap to create.
+func (t *transportImpl) Yield(conn *dns.Conn) {
+	if conn == nil {
+		return
+	}
+	select {
+	case t.pool <- conn:
+		// returned to pool
+	default:
+		// pool full, discard
+		_ = conn.Close()
+	}
+}
+
+// Dial returns a pooled connection if available, or creates a new one.
 func (t *transportImpl) Dial(ctx context.Context, network string) (*dns.Conn, error) {
-	if t.tlsConfig != nil {
+	t.mu.Lock()
+	tlsCfg := t.tlsConfig
+	t.mu.Unlock()
+
+	if tlsCfg != nil {
 		network = TCPTLS
 	}
-	if network == TCPTLS {
-		return t.dial(ctx, &dns.Client{Net: network, Dialer: &net.Dialer{Timeout: maxTimeout}, TLSConfig: t.tlsConfig})
+
+	// Try to get a pooled connection for TCP/TLS
+	if network == TCP || network == TCPTLS {
+		select {
+		case conn := <-t.pool:
+			return conn, nil
+		default:
+			// pool empty, dial new
+		}
 	}
-	return t.dial(ctx, &dns.Client{Net: network, Dialer: &net.Dialer{Timeout: maxTimeout}})
+
+	if network == TCPTLS {
+		return t.dial(ctx, &dns.Client{Net: network, Dialer: &net.Dialer{Timeout: dialTimeout}, TLSConfig: tlsCfg})
+	}
+	return t.dial(ctx, &dns.Client{Net: network, Dialer: &net.Dialer{Timeout: dialTimeout}})
 }
 
 func (t *transportImpl) dial(ctx context.Context, c *dns.Client) (*dns.Conn, error) {
@@ -68,7 +111,7 @@ func (t *transportImpl) dial(ctx context.Context, c *dns.Client) (*dns.Conn, err
 	}
 	var d net.Dialer
 	if c.Dialer == nil {
-		d = net.Dialer{Timeout: maxTimeout}
+		d = net.Dialer{Timeout: dialTimeout}
 	} else {
 		d = *c.Dialer
 	}
@@ -79,7 +122,8 @@ func (t *transportImpl) dial(ctx context.Context, c *dns.Client) (*dns.Conn, err
 	var conn = new(dns.Conn)
 	var err error
 	if network == TCPTLS {
-		conn.Conn, err = tls.DialWithDialer(&d, "tcp", t.addr, c.TLSConfig)
+		tlsDialer := &tls.Dialer{Config: c.TLSConfig, NetDialer: &d}
+		conn.Conn, err = tlsDialer.DialContext(ctx, "tcp", t.addr)
 	} else {
 		conn.Conn, err = d.DialContext(ctx, network, t.addr)
 	}

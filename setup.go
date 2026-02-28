@@ -19,7 +19,6 @@
 package fanout
 
 import (
-	"math/rand"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -145,7 +144,7 @@ func initClients(f *Fanout, hosts []string) {
 	transports := make([]string, len(hosts))
 	for i, host := range hosts {
 		trans, h := parse.Transport(host)
-		f.clients = append(f.clients, NewClient(h, f.net))
+		f.addClient(NewClient(h, f.net))
 		transports[i] = trans
 	}
 
@@ -176,8 +175,6 @@ func initServerSelectionPolicy(f *Fanout) error {
 	if f.policyType == policyWeightedRandom {
 		f.ServerSelectionPolicy = &WeightedPolicy{
 			loadFactor: loadFactor,
-			//nolint:gosec // it's overhead to use crypto/rand here
-			r: rand.New(rand.NewSource(time.Now().UnixNano())),
 		}
 	}
 
@@ -240,7 +237,16 @@ func parseTimeout(f *Fanout, c *caddyfile.Dispenser) error {
 	var err error
 	val := c.Val()
 	f.Timeout, err = time.ParseDuration(val)
-	return err
+	if err != nil {
+		return err
+	}
+	if f.Timeout < minTimeout {
+		return errors.Errorf("timeout %s is too small, minimum is %s", val, minTimeout)
+	}
+	if f.Timeout > maxTimeout {
+		return errors.Errorf("timeout %s is too large, maximum is %s", val, maxTimeout)
+	}
+	return nil
 }
 
 func parseRace(f *Fanout, c *caddyfile.Dispenser) error {
