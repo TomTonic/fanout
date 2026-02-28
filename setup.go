@@ -118,13 +118,20 @@ func parsefanoutStanza(c *caddyfile.Dispenser) (*Fanout, error) {
 		return f, c.ArgErr()
 	}
 
-	// Separate DoH URLs (https://...) from plain host entries.
+	// Separate DoH/DoH3 URLs from plain host entries.
+	// h3:// prefix selects HTTP/3 (QUIC) transport; https:// selects HTTP/2.
 	var dohURLs []string
+	var doh3URLs []string
 	var plainHosts []string
 	for _, t := range to {
-		if strings.HasPrefix(strings.ToLower(t), "https://") {
+		lower := strings.ToLower(t)
+		switch {
+		case strings.HasPrefix(lower, "h3://"):
+			// h3://host/path -> convert to https://host/path for the HTTP client.
+			doh3URLs = append(doh3URLs, "https://"+t[len("h3://"):])
+		case strings.HasPrefix(lower, "https://"):
 			dohURLs = append(dohURLs, t)
-		} else {
+		default:
 			plainHosts = append(plainHosts, t)
 		}
 	}
@@ -147,6 +154,7 @@ func parsefanoutStanza(c *caddyfile.Dispenser) (*Fanout, error) {
 	}
 	initClients(f, toHosts)
 	initDoHClients(f, dohURLs)
+	initDoH3Clients(f, doh3URLs)
 	err := initServerSelectionPolicy(f)
 	if err != nil {
 		return nil, err
@@ -180,6 +188,18 @@ func initClients(f *Fanout, hosts []string) {
 func initDoHClients(f *Fanout, urls []string) {
 	for _, u := range urls {
 		c := NewDoHClient(u)
+		if f.tlsConfig != nil && f.tlsConfig.ServerName != "" {
+			c.SetTLSConfig(f.tlsConfig)
+		}
+		f.addClient(c)
+	}
+}
+
+// initDoH3Clients creates DNS-over-HTTPS/3 (HTTP/3 over QUIC) clients from the provided
+// URLs and appends them to the fanout's client list.
+func initDoH3Clients(f *Fanout, urls []string) {
+	for _, u := range urls {
+		c := NewDoH3Client(u)
 		if f.tlsConfig != nil && f.tlsConfig.ServerName != "" {
 			c.SetTLSConfig(f.tlsConfig)
 		}
@@ -410,7 +430,7 @@ func parseProtocol(f *Fanout, c *caddyfile.Dispenser) error {
 		return c.ArgErr()
 	}
 	net := strings.ToLower(c.Val())
-	if net != TCP && net != UDP && net != TCPTLS && net != DOH {
+	if net != TCP && net != UDP && net != TCPTLS && net != DOH && net != DOH3 {
 		return errors.New("unknown network protocol")
 	}
 	f.net = net
