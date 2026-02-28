@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/coredns/coredns/request"
@@ -72,24 +73,23 @@ func (c *client) Endpoint() string {
 
 // Request sends request to DNS server
 func (c *client) Request(ctx context.Context, r *request.Request) (*dns.Msg, error) {
-	span := ot.SpanFromContext(ctx)
-	if span != nil {
-		childSpan := span.Tracer().StartSpan("request", ot.ChildOf(span.Context()))
-		otext.PeerAddress.Set(childSpan, c.addr)
-		ctx = ot.ContextWithSpan(ctx, childSpan)
-		defer childSpan.Finish()
-	}
+	ctx, finish := withRequestSpan(ctx, c.addr)
+	defer finish()
 	start := time.Now()
 	conn, err := c.transport.Dial(ctx, c.net)
 	if err != nil {
 		return nil, err
 	}
 
-	//Set buffer size correctly for this conn.
-	conn.UDPSize = uint16(r.Size())
-	if conn.UDPSize < 512 {
-		conn.UDPSize = 512
+	// Set buffer size correctly for this conn.
+	udpSize := r.Size()
+	if udpSize < 512 {
+		udpSize = 512
 	}
+	if udpSize > math.MaxUint16 {
+		udpSize = math.MaxUint16
+	}
+	conn.UDPSize = uint16(udpSize)
 
 	defer func() {
 		_ = conn.Close()
@@ -126,4 +126,14 @@ func (c *client) Request(ctx context.Context, r *request.Request) (*dns.Msg, err
 	RcodeCount.WithLabelValues(rc, c.addr).Add(1)
 	RequestDuration.WithLabelValues(c.addr).Observe(time.Since(start).Seconds())
 	return ret, nil
+}
+
+func withRequestSpan(ctx context.Context, addr string) (context.Context, func()) {
+	span := ot.SpanFromContext(ctx)
+	if span == nil {
+		return ctx, func() {}
+	}
+	childSpan := span.Tracer().StartSpan("request", ot.ChildOf(span.Context()))
+	otext.PeerAddress.Set(childSpan, addr)
+	return ot.ContextWithSpan(ctx, childSpan), childSpan.Finish
 }

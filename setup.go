@@ -256,7 +256,27 @@ func parseIgnoredFromFile(f *Fanout, c *caddyfile.Dispenser) error {
 	if len(args) != 1 {
 		return c.ArgErr()
 	}
-	b, err := os.ReadFile(filepath.Clean(args[0]))
+	cleanPath := filepath.Clean(args[0])
+	if !filepath.IsAbs(cleanPath) && !filepath.IsLocal(cleanPath) {
+		return errors.Errorf("path must be local: %q", args[0])
+	}
+	readPath := cleanPath
+	if !filepath.IsAbs(cleanPath) {
+		workDir, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		absPath := filepath.Join(workDir, cleanPath)
+		relPath, err := filepath.Rel(workDir, absPath)
+		if err != nil {
+			return err
+		}
+		if relPath == ".." || strings.HasPrefix(relPath, ".."+string(os.PathSeparator)) {
+			return errors.Errorf("path escapes working directory: %q", args[0])
+		}
+		readPath = absPath
+	}
+	b, err := os.ReadFile(readPath)
 	if err != nil {
 		return err
 	}

@@ -249,7 +249,7 @@ func (t *fanoutTestSuite) TestTwoServersUnsuccessfulResponse() {
 		t.Nil(err)
 	}
 	for _, m := range writer.answers {
-		t.Equal(m.MsgHdr.Rcode, dns.RcodeSuccess)
+		t.Equal(m.Rcode, dns.RcodeSuccess)
 	}
 }
 
@@ -272,7 +272,7 @@ func (t *fanoutTestSuite) TestCanReturnUnsuccessfulRepose() {
 	_, err := f.ServeDNS(context.Background(), writer, req)
 	t.Nil(err)
 	t.Len(writer.answers, 1)
-	t.Equal(writer.answers[0].MsgHdr.Rcode, dns.RcodeNameError, "fanout plugin returns first negative answer if other answers on request are negative")
+	t.Equal(writer.answers[0].Rcode, dns.RcodeNameError, "fanout plugin returns first negative answer if other answers on request are negative")
 }
 
 func (t *fanoutTestSuite) TestBusyServer() {
