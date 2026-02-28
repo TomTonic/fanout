@@ -3,7 +3,7 @@ module github.com/TomTonic/fanout
 go 1.26
 
 require (
-	github.com/coredns/caddy v1.1.4
+	github.com/coredns/caddy/v2 v2.1.1
 	github.com/coredns/coredns v1.14.1
 	github.com/dnstap/golang-dnstap v0.4.0
 	github.com/miekg/dns v1.1.72
