@@ -225,7 +225,7 @@ func TestRealWorldAdGuardDoQ(t *testing.T) {
 // all six supported transport protocols against Cloudflare's public DNS.
 // It verifies that every protocol produces a valid response and that the answers
 // contain at least one overlapping IP address (proving they resolve the same records).
-func TestRealWorldCloudflareAllProtocols(t *testing.T) {
+func TestRealWorldCloudflareAllProtocols(t *testing.T) { //nolint:gocyclo,funlen // integration test intentionally covers many protocol branches
 	if testing.Short() {
 		t.Skip("skipping real-world test in short mode")
 	}

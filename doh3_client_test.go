@@ -26,6 +26,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -56,14 +57,14 @@ func (s *doh3TestServer) close() {
 	_ = s.conn.Close()
 }
 
-// url returns the https:// URL of the test server with the given path.
-func (s *doh3TestServer) url(path string) string {
-	return fmt.Sprintf("https://%s%s", s.addr, path)
+// url returns the https:// URL of the test server for the /dns-query endpoint.
+func (s *doh3TestServer) url() string {
+	return fmt.Sprintf("https://%s/dns-query", s.addr)
 }
 
 // newDoH3TestServer starts an HTTP/3 (QUIC) server that handles DNS-over-HTTPS requests.
 // Returns the server wrapper and a TLS config that trusts the server's self-signed certificate.
-func newDoH3TestServer(t *testing.T, handler dns.HandlerFunc) *doh3TestServer {
+func newDoH3TestServer(t *testing.T, handler dns.HandlerFunc) *doh3TestServer { //nolint:funlen // test helper setup
 	t.Helper()
 
 	// Generate a self-signed ECDSA certificate for the test server.
@@ -106,20 +107,20 @@ func newDoH3TestServer(t *testing.T, handler dns.HandlerFunc) *doh3TestServer {
 			http.Error(w, "only POST allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if ct := r.Header.Get("Content-Type"); ct != "application/dns-message" {
+		if ct := r.Header.Get("Content-Type"); ct != dohContentType {
 			http.Error(w, "bad content-type", http.StatusBadRequest)
 			return
 		}
 
 		buf := make([]byte, 64*1024)
-		n, err := r.Body.Read(buf)
-		if err != nil && err.Error() != "EOF" {
+		n, readErr := r.Body.Read(buf)
+		if readErr != nil && readErr != io.EOF {
 			http.Error(w, "read error", http.StatusBadRequest)
 			return
 		}
 
 		msg := new(dns.Msg)
-		if err := msg.Unpack(buf[:n]); err != nil {
+		if unpackErr := msg.Unpack(buf[:n]); unpackErr != nil {
 			http.Error(w, "unpack error", http.StatusBadRequest)
 			return
 		}
@@ -133,13 +134,13 @@ func newDoH3TestServer(t *testing.T, handler dns.HandlerFunc) *doh3TestServer {
 			resp.SetRcode(msg, dns.RcodeServerFailure)
 		}
 
-		packed, err := resp.Pack()
-		if err != nil {
+		packed, packErr := resp.Pack()
+		if packErr != nil {
 			http.Error(w, "pack error", http.StatusInternalServerError)
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/dns-message")
+		w.Header().Set("Content-Type", dohContentType)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(packed)
 	})
@@ -194,7 +195,7 @@ func TestDoH3ClientBasicRequest(t *testing.T) {
 	})
 	defer srv.close()
 
-	c := newDoH3ClientWithTLS(srv.url("/dns-query"), srv.clientTLS)
+	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
 	req := new(dns.Msg)
@@ -222,7 +223,7 @@ func TestDoH3ClientNXDOMAIN(t *testing.T) {
 	})
 	defer srv.close()
 
-	c := newDoH3ClientWithTLS(srv.url("/dns-query"), srv.clientTLS)
+	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
 	req := new(dns.Msg)
@@ -238,7 +239,7 @@ func TestDoH3ClientNXDOMAIN(t *testing.T) {
 
 // TestDoH3ClientMultipleRecords verifies that multiple A records are returned correctly over HTTP/3.
 func TestDoH3ClientMultipleRecords(t *testing.T) {
-	srv := newDoH3TestServer(t, func(w dns.ResponseWriter, r *dns.Msg) {
+	srv := newDoH3TestServer(t, func(w dns.ResponseWriter, r *dns.Msg) { //nolint:dupl // test pattern shared with DoQ
 		msg := new(dns.Msg)
 		msg.SetReply(r)
 		msg.Answer = append(msg.Answer,
@@ -250,7 +251,7 @@ func TestDoH3ClientMultipleRecords(t *testing.T) {
 	})
 	defer srv.close()
 
-	c := newDoH3ClientWithTLS(srv.url("/dns-query"), srv.clientTLS)
+	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
 	req := new(dns.Msg)
@@ -277,7 +278,7 @@ func TestDoH3ClientAAAARecord(t *testing.T) {
 	})
 	defer srv.close()
 
-	c := newDoH3ClientWithTLS(srv.url("/dns-query"), srv.clientTLS)
+	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
 	req := new(dns.Msg)
@@ -305,7 +306,7 @@ func TestDoH3ClientSERVFAIL(t *testing.T) {
 	})
 	defer srv.close()
 
-	c := newDoH3ClientWithTLS(srv.url("/dns-query"), srv.clientTLS)
+	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
 	req := new(dns.Msg)
@@ -334,7 +335,7 @@ func TestDoH3ClientIDPreservation(t *testing.T) {
 	})
 	defer srv.close()
 
-	c := newDoH3ClientWithTLS(srv.url("/dns-query"), srv.clientTLS)
+	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
 	req := new(dns.Msg)
@@ -365,7 +366,7 @@ func TestDoH3ClientPreservesFlags(t *testing.T) {
 	})
 	defer srv.close()
 
-	c := newDoH3ClientWithTLS(srv.url("/dns-query"), srv.clientTLS)
+	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
 	req := new(dns.Msg)
@@ -392,7 +393,7 @@ func TestDoH3ClientEmptyResponse(t *testing.T) {
 	})
 	defer srv.close()
 
-	c := newDoH3ClientWithTLS(srv.url("/dns-query"), srv.clientTLS)
+	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
 	req := new(dns.Msg)
@@ -421,7 +422,7 @@ func TestDoH3ClientTXTRecord(t *testing.T) {
 	})
 	defer srv.close()
 
-	c := newDoH3ClientWithTLS(srv.url("/dns-query"), srv.clientTLS)
+	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
 	req := new(dns.Msg)
@@ -453,7 +454,7 @@ func TestDoH3ClientConcurrentRequests(t *testing.T) {
 	})
 	defer srv.close()
 
-	c := newDoH3ClientWithTLS(srv.url("/dns-query"), srv.clientTLS)
+	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
 	const goroutines = 10
@@ -547,13 +548,13 @@ func TestDoH3ClientServerDown(t *testing.T) {
 
 // TestDoH3ClientContextCancellation verifies that a cancelled context aborts the HTTP/3 request.
 func TestDoH3ClientContextCancellation(t *testing.T) {
-	srv := newDoH3TestServer(t, func(w dns.ResponseWriter, r *dns.Msg) {
+	srv := newDoH3TestServer(t, func(_ dns.ResponseWriter, _ *dns.Msg) {
 		// Slow handler: sleep longer than the context timeout.
 		time.Sleep(10 * time.Second)
 	})
 	defer srv.close()
 
-	c := newDoH3ClientWithTLS(srv.url("/dns-query"), srv.clientTLS)
+	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
 	req := new(dns.Msg)
@@ -598,7 +599,7 @@ func TestDoH3IntegrationWithFanout(t *testing.T) {
 
 	f := New()
 	f.From = "."
-	doh3c := newDoH3ClientWithTLS(srv.url("/dns-query"), srv.clientTLS)
+	doh3c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, doh3c)
 	f.AddClient(doh3c)
 

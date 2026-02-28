@@ -119,32 +119,7 @@ func parsefanoutStanza(c *caddyfile.Dispenser) (*Fanout, error) {
 		return f, c.ArgErr()
 	}
 
-	// Separate protocol-specific URLs from plain host entries.
-	// Scheme prefixes: https:// → DoH (HTTP/2), h3:// → DoH3 (HTTP/3), quic:// → DoQ (RFC 9250).
-	var dohURLs []string
-	var doh3URLs []string
-	var doqAddrs []string
-	var plainHosts []string
-	for _, t := range to {
-		lower := strings.ToLower(t)
-		switch {
-		case strings.HasPrefix(lower, "h3://"):
-			// h3://host/path -> convert to https://host/path for the HTTP client.
-			doh3URLs = append(doh3URLs, "https://"+t[len("h3://"):])
-		case strings.HasPrefix(lower, "https://"):
-			dohURLs = append(dohURLs, t)
-		case strings.HasPrefix(lower, "quic://"):
-			// quic://host:port -> host:port for raw QUIC (DoQ, RFC 9250).
-			addr := t[len("quic://"):]
-			// Default DoQ port is 853 (same as DoT).
-			if _, _, err := net.SplitHostPort(addr); err != nil {
-				addr = addr + ":853"
-			}
-			doqAddrs = append(doqAddrs, addr)
-		default:
-			plainHosts = append(plainHosts, t)
-		}
-	}
+	dohURLs, doh3URLs, doqAddrs, plainHosts := classifyUpstreams(to)
 
 	// Parse non-DoH hosts through the standard host/port/file resolver.
 	var toHosts []string
@@ -176,6 +151,32 @@ func parsefanoutStanza(c *caddyfile.Dispenser) (*Fanout, error) {
 	}
 
 	return f, nil
+}
+
+// classifyUpstreams separates upstream addresses by protocol scheme.
+// Scheme prefixes: https:// → DoH (HTTP/2), h3:// → DoH3 (HTTP/3), quic:// → DoQ (RFC 9250).
+func classifyUpstreams(to []string) (dohURLs, doh3URLs, doqAddrs, plainHosts []string) {
+	for _, t := range to {
+		lower := strings.ToLower(t)
+		switch {
+		case strings.HasPrefix(lower, "h3://"):
+			// h3://host/path -> convert to https://host/path for the HTTP client.
+			doh3URLs = append(doh3URLs, "https://"+t[len("h3://"):])
+		case strings.HasPrefix(lower, "https://"):
+			dohURLs = append(dohURLs, t)
+		case strings.HasPrefix(lower, "quic://"):
+			// Strip the quic:// scheme, leaving host:port for DoQ (RFC 9250).
+			addr := t[len("quic://"):]
+			// Default DoQ port is 853 (same as DoT).
+			if _, _, err := net.SplitHostPort(addr); err != nil {
+				addr += ":853"
+			}
+			doqAddrs = append(doqAddrs, addr)
+		default:
+			plainHosts = append(plainHosts, t)
+		}
+	}
+	return
 }
 
 func initClients(f *Fanout, hosts []string) {
@@ -452,11 +453,11 @@ func parseProtocol(f *Fanout, c *caddyfile.Dispenser) error {
 	if !c.NextArg() {
 		return c.ArgErr()
 	}
-	net := strings.ToLower(c.Val())
-	if net != TCP && net != UDP && net != TCPTLS && net != DOH && net != DOH3 && net != DOQ {
+	protocol := strings.ToLower(c.Val())
+	if protocol != TCP && protocol != UDP && protocol != TCPTLS && protocol != DOH && protocol != DOH3 && protocol != DOQ {
 		return errors.New("unknown network protocol")
 	}
-	f.net = net
+	f.net = protocol
 	return nil
 }
 

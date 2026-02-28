@@ -61,7 +61,7 @@ func (s *doqTestServer) close() {
 // It accepts QUIC connections with the "doq" ALPN token, reads DNS queries
 // from bidirectional streams (2-byte length prefix per RFC 9250), processes
 // them via the provided handler, and writes the response back.
-func newDoQTestServer(t *testing.T, handler dns.HandlerFunc) *doqTestServer {
+func newDoQTestServer(t *testing.T, handler dns.HandlerFunc) *doqTestServer { //nolint:funlen // test helper setup
 	t.Helper()
 
 	// Generate a self-signed ECDSA certificate.
@@ -207,7 +207,7 @@ func handleDoQStream(stream *quic.Stream, handler dns.HandlerFunc, done chan str
 
 	// Write 2-byte length prefix + response.
 	respBuf := make([]byte, 2+len(packed))
-	binary.BigEndian.PutUint16(respBuf[:2], uint16(len(packed)))
+	binary.BigEndian.PutUint16(respBuf[:2], uint16(len(packed))) //nolint:gosec // bound by DNS message size
 	copy(respBuf[2:], packed)
 	_, _ = (*stream).Write(respBuf)
 }
@@ -304,7 +304,7 @@ func TestDoQClientSERVFAIL(t *testing.T) {
 
 // TestDoQClientMultipleRecords verifies that multiple A records are returned over DoQ.
 func TestDoQClientMultipleRecords(t *testing.T) {
-	srv := newDoQTestServer(t, func(w dns.ResponseWriter, r *dns.Msg) {
+	srv := newDoQTestServer(t, func(w dns.ResponseWriter, r *dns.Msg) { //nolint:dupl // test pattern shared with DoH3
 		msg := new(dns.Msg)
 		msg.SetReply(r)
 		msg.Answer = append(msg.Answer,
@@ -595,7 +595,7 @@ func TestDoQClientServerDown(t *testing.T) {
 // TestDoQClientContextCancellation verifies that a cancelled context aborts the DoQ request.
 func TestDoQClientContextCancellation(t *testing.T) {
 	handlerDone := make(chan struct{})
-	srv := newDoQTestServer(t, func(w dns.ResponseWriter, r *dns.Msg) {
+	srv := newDoQTestServer(t, func(_ dns.ResponseWriter, _ *dns.Msg) {
 		// Slow handler: block until the test signals completion.
 		<-handlerDone
 	})
