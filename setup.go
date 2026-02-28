@@ -19,6 +19,7 @@
 package fanout
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -117,18 +118,30 @@ func parsefanoutStanza(c *caddyfile.Dispenser) (*Fanout, error) {
 	if len(to) == 0 {
 		return f, c.ArgErr()
 	}
-	toHosts, err := parse.HostPortOrFile(to...)
-	if err != nil {
-		return f, err
+
+	dohURLs, doh3URLs, doqAddrs, plainHosts := classifyUpstreams(to)
+
+	// Parse non-DoH hosts through the standard host/port/file resolver.
+	var toHosts []string
+	if len(plainHosts) > 0 {
+		var err error
+		toHosts, err = parse.HostPortOrFile(plainHosts...)
+		if err != nil {
+			return f, err
+		}
 	}
+
 	for c.NextBlock() {
-		err = parseValue(strings.ToLower(c.Val()), f, c)
+		err := parseValue(strings.ToLower(c.Val()), f, c)
 		if err != nil {
 			return nil, err
 		}
 	}
 	initClients(f, toHosts)
-	err = initServerSelectionPolicy(f)
+	initDoHClients(f, dohURLs)
+	initDoH3Clients(f, doh3URLs)
+	initDoQClients(f, doqAddrs)
+	err := initServerSelectionPolicy(f)
 	if err != nil {
 		return nil, err
 	}
@@ -138,6 +151,32 @@ func parsefanoutStanza(c *caddyfile.Dispenser) (*Fanout, error) {
 	}
 
 	return f, nil
+}
+
+// classifyUpstreams separates upstream addresses by protocol scheme.
+// Scheme prefixes: https:// → DoH (HTTP/2), h3:// → DoH3 (HTTP/3), quic:// → DoQ (RFC 9250).
+func classifyUpstreams(to []string) (dohURLs, doh3URLs, doqAddrs, plainHosts []string) {
+	for _, t := range to {
+		lower := strings.ToLower(t)
+		switch {
+		case strings.HasPrefix(lower, "h3://"):
+			// h3://host/path -> convert to https://host/path for the HTTP client.
+			doh3URLs = append(doh3URLs, "https://"+t[len("h3://"):])
+		case strings.HasPrefix(lower, "https://"):
+			dohURLs = append(dohURLs, t)
+		case strings.HasPrefix(lower, "quic://"):
+			// Strip the quic:// scheme, leaving host:port for DoQ (RFC 9250).
+			addr := t[len("quic://"):]
+			// Default DoQ port is 853 (same as DoT).
+			if _, _, err := net.SplitHostPort(addr); err != nil {
+				addr += ":853"
+			}
+			doqAddrs = append(doqAddrs, addr)
+		default:
+			plainHosts = append(plainHosts, t)
+		}
+	}
+	return
 }
 
 func initClients(f *Fanout, hosts []string) {
@@ -153,6 +192,42 @@ func initClients(f *Fanout, hosts []string) {
 		if transports[i] == transport.TLS {
 			f.clients[i].SetTLSConfig(f.tlsConfig)
 		}
+	}
+}
+
+// initDoHClients creates DNS-over-HTTPS clients from the provided URLs and appends them
+// to the fanout's client list. Each URL must be a full HTTPS endpoint (e.g. "https://dns.google/dns-query").
+func initDoHClients(f *Fanout, urls []string) {
+	for _, u := range urls {
+		c := NewDoHClient(u)
+		if f.tlsConfig != nil && f.tlsConfig.ServerName != "" {
+			c.SetTLSConfig(f.tlsConfig)
+		}
+		f.addClient(c)
+	}
+}
+
+// initDoH3Clients creates DNS-over-HTTPS/3 (HTTP/3 over QUIC) clients from the provided
+// URLs and appends them to the fanout's client list.
+func initDoH3Clients(f *Fanout, urls []string) {
+	for _, u := range urls {
+		c := NewDoH3Client(u)
+		if f.tlsConfig != nil && f.tlsConfig.ServerName != "" {
+			c.SetTLSConfig(f.tlsConfig)
+		}
+		f.addClient(c)
+	}
+}
+
+// initDoQClients creates DNS-over-QUIC (RFC 9250) clients from the provided addresses
+// and appends them to the fanout's client list.
+func initDoQClients(f *Fanout, addrs []string) {
+	for _, a := range addrs {
+		c := NewDoQClient(a)
+		if f.tlsConfig != nil && f.tlsConfig.ServerName != "" {
+			c.SetTLSConfig(f.tlsConfig)
+		}
+		f.addClient(c)
 	}
 }
 
@@ -378,11 +453,11 @@ func parseProtocol(f *Fanout, c *caddyfile.Dispenser) error {
 	if !c.NextArg() {
 		return c.ArgErr()
 	}
-	net := strings.ToLower(c.Val())
-	if net != TCP && net != UDP && net != TCPTLS {
+	protocol := strings.ToLower(c.Val())
+	if protocol != TCP && protocol != UDP && protocol != TCPTLS && protocol != DOH && protocol != DOH3 && protocol != DOQ {
 		return errors.New("unknown network protocol")
 	}
-	f.net = net
+	f.net = protocol
 	return nil
 }
 

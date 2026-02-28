@@ -15,4 +15,12 @@
 // limitations under the License.
 
 // Package fanout - parallel proxying DNS messages to upstream resolvers.
+//
+// Supported transport protocols:
+//   - DNS/UDP (plain, default)
+//   - DNS/TCP (plain)
+//   - DoT  - DNS-over-TLS   (RFC 7858)  — tls:// prefix or "tls" directive
+//   - DoH  - DNS-over-HTTPS (RFC 8484)  — https:// prefix (HTTP/2 transport)
+//   - DoH3 - DNS-over-HTTPS (RFC 8484)  — h3:// prefix   (HTTP/3 / QUIC transport, RFC 9114)
+//   - DoQ  - DNS-over-QUIC  (RFC 9250)  — quic:// prefix
 package fanout
