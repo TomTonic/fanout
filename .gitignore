@@ -5,6 +5,7 @@
 *.so
 *.dylib
 /coredns/coredns
+/coredns/main
 
 # Test binary, built with `go test -c`
 *.test
@@ -17,3 +18,4 @@
 
 .idea/
 junit/
+.vscode/
