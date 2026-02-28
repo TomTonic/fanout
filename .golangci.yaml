@@ -1,90 +1,12 @@
 ---
+version: "2"
+
 run:
-  # concurrency: 6
   timeout: 1m
-  issues-exit-code: 1
-  tests: true
-linters-settings:
-  errcheck:
-    check-type-assertions: false
-    check-blank: false
-  govet:
-    enable:
-      shadow
-    settings:
-      printf:
-        funcs:
-          - (github.com/sirupsen/logrus.FieldLogger).Infof
-          - (github.com/sirupsen/logrus.FieldLogger).Warnf
-          - (github.com/sirupsen/logrus.FieldLogger).Errorf
-          - (github.com/sirupsen/logrus.FieldLogger).Fatalf
-  goimports:
-    local-prefixes: github.com/networkservicemesh/sdk
-  gocyclo:
-    min-complexity: 15
-  maligned:
-    suggest-new: true
-  dupl:
-    threshold: 150
-  goconst:
-    min-len: 2
-    min-occurrences: 2
-  depguard:
-    rules:
-      default:
-        deny:
-          - pkg: "errors"
-            desc: "Please use \"github.com/pkg/errors\" instead of \"errors\" in go imports"
-  misspell:
-    locale: US
-  unparam:
-    check-exported: false
-  nakedret:
-    max-func-lines: 30
-  prealloc:
-    simple: true
-    range-loops: true
-    for-loops: false
-  gocritic:
-    enabled-checks:
-      - appendCombine
-      - boolExprSimplify
-      - builtinShadow
-      - commentedOutCode
-      - commentedOutImport
-      - docStub
-      - dupImport
-      - emptyFallthrough
-      - emptyStringTest
-      - equalFold
-      - evalOrder
-      - hexLiteral
-      - hugeParam
-      - importShadow
-      - indexAlloc
-      - initClause
-      - methodExprCall
-      - nestingReduce
-      - nilValReturn
-      - octalLiteral
-      - paramTypeCombine
-      - ptrToRefParam
-      - rangeExprCopy
-      - rangeValCopy
-      - regexpPattern
-      - sloppyReassign
-      - stringXbytes
-      - typeAssertChain
-      - typeUnparen
-      - unlabelStmt
-      - unnamedResult
-      - unnecessaryBlock
-      - weakCond
-      - yodaStyleExpr
+
 linters:
-  disable-all: true
+  default: none
   enable:
-    # - rowserrcheck
     - bodyclose
     - depguard
     - dogsled
@@ -95,44 +17,104 @@ linters:
     - goconst
     - gocritic
     - gocyclo
-    - gofmt
-    - goimports
     - revive
     - gosec
-    - gosimple
     - govet
     - ineffassign
-    # - lll
     - misspell
     - nakedret
     - staticcheck
-    - stylecheck
-    - typecheck
     - unconvert
     - unparam
     - unused
     - whitespace
+  settings:
+    govet:
+      enable:
+        - shadow
+      settings:
+        printf:
+          funcs:
+            - (github.com/sirupsen/logrus.FieldLogger).Infof
+            - (github.com/sirupsen/logrus.FieldLogger).Warnf
+            - (github.com/sirupsen/logrus.FieldLogger).Errorf
+            - (github.com/sirupsen/logrus.FieldLogger).Fatalf
+    gocyclo:
+      min-complexity: 15
+    goconst:
+      min-len: 2
+      min-occurrences: 2
+    depguard:
+      rules:
+        default:
+          deny:
+            - pkg: "errors"
+              desc: "Please use \"github.com/pkg/errors\" instead of \"errors\" in go imports"
+    nakedret:
+      max-func-lines: 30
+    gocritic:
+      enabled-checks:
+        - appendCombine
+        - boolExprSimplify
+        - builtinShadow
+        - commentedOutCode
+        - commentedOutImport
+        - docStub
+        - dupImport
+        - emptyFallthrough
+        - emptyStringTest
+        - equalFold
+        - evalOrder
+        - hexLiteral
+        - hugeParam
+        - importShadow
+        - indexAlloc
+        - initClause
+        - methodExprCall
+        - nestingReduce
+        - nilValReturn
+        - octalLiteral
+        - paramTypeCombine
+        - ptrToRefParam
+        - rangeExprCopy
+        - rangeValCopy
+        - regexpPattern
+        - sloppyReassign
+        - stringXbytes
+        - typeAssertChain
+        - typeUnparen
+        - unlabelStmt
+        - unnamedResult
+        - unnecessaryBlock
+        - weakCond
+        - yodaStyleExpr
+  exclusions:
+    rules:
+      - path: "setup_test.go"
+        linters:
+          - funlen
+      - path: "setup.go"
+        linters:
+          - gochecknoinits
+      - path: "fanout_test.go"
+        linters:
+          - gosec
+      - path: "setup_test.go"
+        linters:
+          - gocyclo
+      - path: "client.go"
+        linters:
+          - gocritic
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/networkservicemesh/sdk
+
 issues:
-  exclude-use-default: false
   max-issues-per-linter: 0
   max-same-issues: 0
-  exclude-rules:
-    - path: "setup_test.go"
-      linters:
-        - funlen
-    # CoreDNS plugin should have init func.
-    - path: "setup.go"
-      linters:
-        - gochecknoinits
-    # Binds to all network interfaces is used in test to get port.
-    - path: "fanout_test.go"
-      linters:
-        - gosec
-    # Tests may be long.
-    - path: "setup_test.go"
-      linters:
-        - gocyclo
-    # gocritic conflicts with other linters
-    - path: "client.go"
-      linters:
-        - gocritic
