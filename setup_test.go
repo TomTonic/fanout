@@ -28,6 +28,13 @@ import (
 	"github.com/coredns/caddy"
 )
 
+// TestSetup is a comprehensive table-driven test for Corefile parsing via parseFanout.
+// Covers 9 valid configurations (minimal, weighted-random with load-factor, except + worker-count,
+// two hosts with TCP, worker-count + timeout, attempt-count, default load-factor, sequential policy)
+// and 12 invalid configurations (bad host, bad from, worker-count too low, non-integer worker-count,
+// invalid except domain, unknown network, negative server-count, load-factor too high/zero/count
+// mismatch, missing load-factor args). For valid cases, asserts From, Timeout, Attempts, WorkerCount,
+// net, serverCount, policyType, loadFactor, ExcludeDomains, and client endpoints.
 func TestSetup(t *testing.T) {
 	tests := []struct {
 		name                string
@@ -139,6 +146,9 @@ func TestSetup(t *testing.T) {
 	}
 }
 
+// TestSetupResolvconf verifies that during Corefile parsing, if the upstream argument is a
+// resolv.conf-format file, parseFanout extracts nameserver addresses from it.
+// Writes a resolv.conf with two nameservers and verifies both appear as client endpoints with port 53.
 func TestSetupResolvconf(t *testing.T) {
 	const resolv = "resolv.conf"
 	if err := os.WriteFile(resolv,

@@ -9,6 +9,11 @@ import (
 	"github.com/coredns/caddy"
 )
 
+// TestParseErrors verifies argument validation during Corefile parsing for all configuration directives.
+// Table-driven test covering 13 invalid Corefile snippets: missing arguments for network, policy,
+// timeout, tls-server, worker-count, except, race; too many TLS args; no upstream hosts; path escape
+// in except-file; unparseable timeout; invalid worker-count; and bad load-factor format.
+// Each case asserts that parseFanout returns an error containing the expected substring.
 func TestParseErrors(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -44,6 +49,10 @@ func TestParseErrors(t *testing.T) {
 	}
 }
 
+// TestParseExceptFileRelativeOK verifies that during Corefile parsing, a relative except-file path
+// (within the working directory) is accepted and its contents loaded into ExcludeDomains.
+// Creates a temp file in the CWD, parses a Corefile referencing it by relative path,
+// and verifies the domain is present in the exclusion list.
 func TestParseExceptFileRelativeOK(t *testing.T) {
 	// Create a temporary file in the *current working directory* to allow relative path testing
 	cwd, err := os.Getwd()

@@ -22,6 +22,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestWeightedRand_Pick verifies the WeightedRand selector used by the "weighted-random" server
+// selection policy during request distribution. Elements are picked randomly proportional to their
+// weights, without replacement. Uses a fixed random seed for deterministic results.
+// Tests five scenarios: same/different weights with all/some/excess picks.
+// Verifies the exact pick order matches the expected sequence for the given seed.
 func TestWeightedRand_Pick(t *testing.T) {
 	testCases := map[string]struct {
 		values  []string

@@ -9,6 +9,10 @@ import (
 	"github.com/miekg/dns"
 )
 
+// TestClient_Request_Edges verifies edge cases in the DNS client used for forwarding requests to upstream servers.
+// When the incoming request has no EDNS0 OPT record, r.Size() returns a value below 512.
+// The test ensures the client clamps the UDP buffer size to at least 512 bytes and does not panic.
+// It also exercises the code path where the context is cancelled immediately after Request().
 func TestClient_Request_Edges(t *testing.T) {
 	// Need a dummy server to avoid instant connection refused
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
