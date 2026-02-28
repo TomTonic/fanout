@@ -18,7 +18,7 @@ func FuzzDomainAddAndContains(f *testing.F) {
 	f.Add("com.")
 	f.Add("very.deep.sub.domain.example.org.")
 
-	f.Fuzz(func(t *testing.T, input string) {
+	f.Fuzz(func(_ *testing.T, input string) {
 		d := NewDomain()
 		d.AddString(input)  // must not panic
 		d.Contains(input)   // must not panic

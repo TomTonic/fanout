@@ -63,9 +63,15 @@ func TestParseExceptFileRelativeOK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.WriteString("example.org.")
-	f.Close()
-	defer os.Remove(f.Name())
+	_, err = f.WriteString("example.org.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	//nolint:gosec // test-controlled temp file path created in this function
+	defer func() { _ = os.Remove(f.Name()) }()
 
 	relPath, _ := filepath.Rel(cwd, f.Name())
 

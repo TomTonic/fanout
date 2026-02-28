@@ -1,13 +1,14 @@
 package fanout
 
 import (
-	"errors"
 	"testing"
+
+	"github.com/pkg/errors"
 )
 
 // TestLogErrIfNotNil is a utility coverage test. Calls logErrIfNotNil with nil and a non-nil
 // error to ensure it does not panic in either case.
-func TestLogErrIfNotNil(t *testing.T) {
+func TestLogErrIfNotNil(_ *testing.T) {
 	// just to trigger coverage
 	logErrIfNotNil(nil)
 	logErrIfNotNil(errors.New("test error"))
