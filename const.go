@@ -42,4 +42,6 @@ const (
 	TCP = "tcp"
 	// UDP net type for a Client.
 	UDP = "udp"
+	// DOH net type for a DNS-over-HTTPS Client (RFC 8484).
+	DOH = "dns-over-https"
 )
