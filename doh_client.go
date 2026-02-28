@@ -35,6 +35,9 @@ import (
 // This prevents a malicious server from forcing unbounded memory allocation.
 const dohMaxResponseSize = 64 * 1024
 
+// dohContentType is the MIME type for DNS wire-format messages (RFC 8484 §6).
+const dohContentType = "application/dns-message"
+
 // dohClient implements the Client interface for DNS-over-HTTPS (RFC 8484).
 // It uses HTTP POST with the application/dns-message content type.
 type dohClient struct {
@@ -136,10 +139,10 @@ func dohRoundTrip(ctx context.Context, httpClient *http.Client, endpoint string,
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create DoH HTTP request")
 	}
-	httpReq.Header.Set("Content-Type", "application/dns-message")
-	httpReq.Header.Set("Accept", "application/dns-message")
+	httpReq.Header.Set("Content-Type", dohContentType)
+	httpReq.Header.Set("Accept", dohContentType)
 
-	resp, err := httpClient.Do(httpReq)
+	resp, err := httpClient.Do(httpReq) //nolint:gosec // G704: URL comes from plugin configuration, not user input
 	if err != nil {
 		return nil, errors.Wrap(err, "DoH HTTP request failed")
 	}
@@ -153,7 +156,7 @@ func dohRoundTrip(ctx context.Context, httpClient *http.Client, endpoint string,
 		return nil, errors.Errorf("DoH server returned HTTP %d", resp.StatusCode)
 	}
 
-	if ct := resp.Header.Get("Content-Type"); ct != "application/dns-message" {
+	if ct := resp.Header.Get("Content-Type"); ct != dohContentType {
 		return nil, errors.Errorf("DoH server returned unexpected content-type %q", ct)
 	}
 

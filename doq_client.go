@@ -22,7 +22,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"net"
+	"math"
 	"sync"
 	"time"
 
@@ -164,47 +164,59 @@ func (c *doqClient) Request(ctx context.Context, r *request.Request) (*dns.Msg, 
 func (c *doqClient) exchangeOnStream(ctx context.Context, stream *quic.Stream, req *dns.Msg) (*dns.Msg, error) {
 	defer stream.Close() //nolint:errcheck // best-effort close
 
-	// Set write deadline from context or fallback.
-	writeDeadline := time.Now().Add(dialTimeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(writeDeadline) {
-		writeDeadline = d
+	if err := c.writeQuery(ctx, stream, req); err != nil {
+		return nil, err
 	}
+
+	return c.readResponse(ctx, stream, req.Id)
+}
+
+// writeQuery packs and writes a DNS query to the QUIC stream with a 2-byte length prefix.
+func (c *doqClient) writeQuery(ctx context.Context, stream *quic.Stream, req *dns.Msg) error {
+	// Set write deadline from context or fallback.
+	writeDeadline := deadlineFromCtx(ctx, dialTimeout)
 	if err := stream.SetWriteDeadline(writeDeadline); err != nil {
-		return nil, errors.Wrap(err, "DoQ: failed to set write deadline")
+		return errors.Wrap(err, "DoQ: failed to set write deadline")
 	}
 
 	// RFC 9250 §4.2: DNS messages are prefixed with a 2-byte length field.
 	packed, err := req.Pack()
 	if err != nil {
-		return nil, errors.Wrap(err, "DoQ: failed to pack DNS request")
+		return errors.Wrap(err, "DoQ: failed to pack DNS request")
+	}
+
+	if len(packed) > math.MaxUint16 {
+		return errors.Errorf("DoQ: packed DNS message too large (%d bytes)", len(packed))
 	}
 
 	// Write length prefix + message in one write for efficiency.
 	buf := make([]byte, 2+len(packed))
-	binary.BigEndian.PutUint16(buf[:2], uint16(len(packed)))
+	binary.BigEndian.PutUint16(buf[:2], uint16(len(packed))) //nolint:gosec // bound checked above
 	copy(buf[2:], packed)
 
 	if _, err = stream.Write(buf); err != nil {
-		return nil, errors.Wrap(err, "DoQ: failed to write DNS query to stream")
+		return errors.Wrap(err, "DoQ: failed to write DNS query to stream")
 	}
 
 	// RFC 9250 §4.2: The client MUST send a FIN after sending a query.
 	if err = stream.Close(); err != nil {
-		return nil, errors.Wrap(err, "DoQ: failed to close write half of stream")
+		return errors.Wrap(err, "DoQ: failed to close write half of stream")
 	}
 
+	return nil
+}
+
+// readResponse reads a DNS response from the QUIC stream.
+func (c *doqClient) readResponse(ctx context.Context, stream *quic.Stream, origID uint16) (*dns.Msg, error) {
 	// Set read deadline.
-	readDeadline := time.Now().Add(readTimeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(readDeadline) {
-		readDeadline = d
-	}
-	if err = stream.SetReadDeadline(readDeadline); err != nil {
+	readDeadline := deadlineFromCtx(ctx, readTimeout)
+	if err := stream.SetReadDeadline(readDeadline); err != nil {
 		return nil, errors.Wrap(err, "DoQ: failed to set read deadline")
 	}
 
 	// Read the 2-byte length prefix.
 	var lenBuf [2]byte
-	if _, err = io.ReadFull(stream, lenBuf[:]); err != nil {
+	if _, err := io.ReadFull(stream, lenBuf[:]); err != nil {
 		return nil, errors.Wrap(err, "DoQ: failed to read response length prefix")
 	}
 	respLen := binary.BigEndian.Uint16(lenBuf[:])
@@ -214,20 +226,29 @@ func (c *doqClient) exchangeOnStream(ctx context.Context, stream *quic.Stream, r
 
 	// Read the DNS response message.
 	respBuf := make([]byte, respLen)
-	if _, err = io.ReadFull(stream, respBuf); err != nil {
+	if _, err := io.ReadFull(stream, respBuf); err != nil {
 		return nil, errors.Wrap(err, "DoQ: failed to read DNS response")
 	}
 
 	ret := new(dns.Msg)
-	if err = ret.Unpack(respBuf); err != nil {
+	if err := ret.Unpack(respBuf); err != nil {
 		return nil, errors.Wrap(err, "DoQ: failed to unpack DNS response")
 	}
 
 	// RFC 9250 §4.2: The ID MUST be set to 0 in DoQ (set to 0 by server).
 	// We restore the original ID for upstream compatibility.
-	ret.Id = req.Id
+	ret.Id = origID
 
 	return ret, nil
+}
+
+// deadlineFromCtx returns the earlier of ctx.Deadline() and now+fallback.
+func deadlineFromCtx(ctx context.Context, fallback time.Duration) time.Time {
+	d := time.Now().Add(fallback)
+	if ctxD, ok := ctx.Deadline(); ok && ctxD.Before(d) {
+		return ctxD
+	}
+	return d
 }
 
 // getOrDialConn returns the existing QUIC connection or dials a new one.
@@ -280,21 +301,4 @@ func (c *doqClient) closeConn() {
 		_ = c.conn.CloseWithError(doqNoError, "client shutdown")
 		c.conn = nil
 	}
-}
-
-// resolveUDPAddr resolves the address to a UDP address, used for dialing.
-func resolveUDPAddr(addr string) (*net.UDPAddr, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, errors.Wrapf(err, "DoQ: invalid address %q", addr)
-	}
-	ips, err := net.LookupIP(host)
-	if err != nil || len(ips) == 0 {
-		return nil, errors.Wrapf(err, "DoQ: failed to resolve %q", host)
-	}
-	p, err := net.LookupPort("udp", port)
-	if err != nil {
-		return nil, errors.Wrapf(err, "DoQ: invalid port %q", port)
-	}
-	return &net.UDPAddr{IP: ips[0], Port: p}, nil
 }

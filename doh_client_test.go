@@ -25,6 +25,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -44,7 +45,7 @@ import (
 // The handler receives incoming DNS wire-format POST requests, passes them to the provided
 // dns.HandlerFunc, captures the response, and writes it back as application/dns-message.
 // It returns the server and a TLS config suitable for clients to trust the server's certificate.
-func newDoHTestServer(t *testing.T, handler dns.HandlerFunc) (*httptest.Server, *tls.Config) {
+func newDoHTestServer(t *testing.T, handler dns.HandlerFunc) (*httptest.Server, *tls.Config) { //nolint:funlen // test helper setup
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/dns-query", func(w http.ResponseWriter, r *http.Request) {
@@ -60,13 +61,13 @@ func newDoHTestServer(t *testing.T, handler dns.HandlerFunc) (*httptest.Server, 
 
 		buf := make([]byte, 64*1024)
 		n, err := r.Body.Read(buf)
-		if err != nil && err.Error() != "EOF" {
+		if err != nil && err != io.EOF {
 			http.Error(w, "read error", http.StatusBadRequest)
 			return
 		}
 
 		msg := new(dns.Msg)
-		if err := msg.Unpack(buf[:n]); err != nil {
+		if unpackErr := msg.Unpack(buf[:n]); unpackErr != nil {
 			http.Error(w, "unpack error", http.StatusBadRequest)
 			return
 		}
@@ -190,7 +191,7 @@ func TestDoHClientBasicRequest(t *testing.T) {
 }
 
 // TestDoHClientNXDOMAIN verifies that the DoH client correctly handles an NXDOMAIN response.
-func TestDoHClientNXDOMAIN(t *testing.T) {
+func TestDoHClientNXDOMAIN(t *testing.T) { //nolint:dupl // test for NXDOMAIN response
 	srv, clientTLS := newDoHTestServer(t, func(w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		msg.SetRcode(r, dns.RcodeNameError)
@@ -214,7 +215,7 @@ func TestDoHClientNXDOMAIN(t *testing.T) {
 
 // TestDoHClientMultipleRecords verifies that the DoH client can handle responses with
 // multiple answer records.
-func TestDoHClientMultipleRecords(t *testing.T) {
+func TestDoHClientMultipleRecords(t *testing.T) { //nolint:dupl // test for multiple records
 	srv, clientTLS := newDoHTestServer(t, func(w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		msg.SetReply(r)
@@ -243,7 +244,7 @@ func TestDoHClientMultipleRecords(t *testing.T) {
 // TestDoHClientHTTPError verifies that the DoH client returns an error when the server
 // responds with a non-200 HTTP status code.
 func TestDoHClientHTTPError(t *testing.T) {
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()
@@ -263,8 +264,8 @@ func TestDoHClientHTTPError(t *testing.T) {
 
 // TestDoHClientBadContentType verifies that the DoH client returns an error when the
 // server responds with an unexpected content-type header.
-func TestDoHClientBadContentType(t *testing.T) {
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestDoHClientBadContentType(t *testing.T) { //nolint:dupl // test for bad content-type
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("<html>not dns</html>"))
@@ -288,7 +289,7 @@ func TestDoHClientBadContentType(t *testing.T) {
 // an error when the request context is cancelled before the server responds.
 func TestDoHClientContextCancellation(t *testing.T) {
 	// Server that sleeps longer than the context deadline to force cancellation.
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		time.Sleep(30 * time.Second)
 	}))
 	defer srv.Close()
@@ -333,8 +334,8 @@ func TestDoHClientSetTLSConfig(t *testing.T) {
 
 // TestDoHClientMalformedResponse verifies that the DoH client returns an error when
 // the server sends an invalid (non-DNS) response body.
-func TestDoHClientMalformedResponse(t *testing.T) {
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestDoHClientMalformedResponse(t *testing.T) { //nolint:dupl // test for malformed response
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/dns-message")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("this is not a valid DNS message"))
@@ -473,7 +474,7 @@ func TestDoHClientServerDown(t *testing.T) {
 
 // TestDoHClientCustomTLS verifies that a DoH client works correctly with a custom
 // TLS configuration using a self-signed certificate.
-func TestDoHClientCustomTLS(t *testing.T) {
+func TestDoHClientCustomTLS(t *testing.T) { //nolint:funlen // test helper setup
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 
@@ -504,7 +505,7 @@ func TestDoHClientCustomTLS(t *testing.T) {
 		buf := make([]byte, 64*1024)
 		n, _ := r.Body.Read(buf)
 		msg := new(dns.Msg)
-		if err := msg.Unpack(buf[:n]); err != nil {
+		if unpackErr := msg.Unpack(buf[:n]); unpackErr != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
@@ -658,7 +659,7 @@ func TestDoHClientIDPreservation(t *testing.T) {
 
 // TestDoHClientSERVFAIL verifies that the DoH client returns a SERVFAIL response correctly
 // without treating it as a transport-level error.
-func TestDoHClientSERVFAIL(t *testing.T) {
+func TestDoHClientSERVFAIL(t *testing.T) { //nolint:dupl // test for SERVFAIL response
 	srv, clientTLS := newDoHTestServer(t, func(w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		msg.SetRcode(r, dns.RcodeServerFailure)
@@ -813,8 +814,8 @@ func TestDoHClientConnectionRefused(t *testing.T) {
 	require.NoError(t, err)
 	go func() {
 		for {
-			conn, err := ln.Accept()
-			if err != nil {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
 				return
 			}
 			_ = conn.Close()
