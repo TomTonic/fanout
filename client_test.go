@@ -10,6 +10,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestUseRequestSizeOnConn verifies that the client propagates the EDNS0 buffer size from the
+// original request onto the upstream connection, so that large responses are not silently truncated.
+// A query with dns.DefaultMsgSize is sent to a dummy server returning three large A records.
+// The test asserts all three records arrive intact, confirming the buffer size is set correctly.
 func TestUseRequestSizeOnConn(t *testing.T) {
 	s := newServer("udp", func(w dns.ResponseWriter, r *dns.Msg) {
 		msg := dns.Msg{
