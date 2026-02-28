@@ -30,7 +30,10 @@ const (
 	defaultTimeout       = 30 * time.Second
 	readTimeout          = 2 * time.Second
 	attemptDelay         = time.Millisecond * 100
-	TCPTLS               = "tcp-tls" // TCPTLS Net type for a Client.
-	TCP                  = "tcp"     // TCP Net type for a Client.
-	UDP                  = "udp"     // UDP Net type for a Client.
+	// TCPTLS net type for a Client.
+	TCPTLS = "tcp-tls"
+	// TCP net type for a Client.
+	TCP = "tcp"
+	// UDP net type for a Client.
+	UDP = "udp"
 )
