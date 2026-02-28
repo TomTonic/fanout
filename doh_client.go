@@ -24,6 +24,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/coredns/coredns/request"
@@ -41,8 +42,9 @@ const dohContentType = "application/dns-message"
 // dohClient implements the Client interface for DNS-over-HTTPS (RFC 8484).
 // It uses HTTP POST with the application/dns-message content type.
 type dohClient struct {
-	endpoint   string // full URL, e.g. "https://dns.google/dns-query"
-	netType    string // DOH or DOH3
+	endpoint   string     // full URL, e.g. "https://dns.google/dns-query"
+	netType    string     // DOH or DOH3
+	mu         sync.Mutex // protects httpClient during SetTLSConfig
 	httpClient *http.Client
 }
 
@@ -63,11 +65,14 @@ func newDoHClientWithTLS(endpoint string, tlsConfig *tls.Config) Client {
 }
 
 // newHTTP2Client creates an http.Client backed by an HTTP/2-capable transport.
+// The TLS config is cloned defensively to prevent external mutation.
 func newHTTP2Client(tlsConfig *tls.Config) *http.Client {
 	if tlsConfig == nil {
 		tlsConfig = &tls.Config{
 			MinVersion: tls.VersionTLS12,
 		}
+	} else {
+		tlsConfig = tlsConfig.Clone()
 	}
 	tr := &http.Transport{
 		TLSClientConfig:     tlsConfig,
@@ -86,23 +91,25 @@ func newHTTP2Client(tlsConfig *tls.Config) *http.Client {
 }
 
 // SetTLSConfig updates the TLS configuration used by the HTTP transport.
-// This replaces the underlying transport with a new one using the provided config.
+// A new http.Client is created with the new config. The old transport is closed
+// to release idle connections and avoid leaking goroutines.
 func (c *dohClient) SetTLSConfig(cfg *tls.Config) {
 	if cfg == nil {
 		return
 	}
 	cfg.MinVersion = tls.VersionTLS12
-	tr := &http.Transport{
-		TLSClientConfig:     cfg,
-		ForceAttemptHTTP2:   true,
-		MaxIdleConns:        connPoolSize,
-		MaxIdleConnsPerHost: connPoolSize,
-		IdleConnTimeout:     90 * time.Second,
-		DialContext: (&net.Dialer{
-			Timeout: dialTimeout,
-		}).DialContext,
+
+	newClient := newHTTP2Client(cfg)
+
+	c.mu.Lock()
+	old := c.httpClient
+	c.httpClient = newClient
+	c.mu.Unlock()
+
+	// Close idle connections on the old transport.
+	if tr, ok := old.Transport.(*http.Transport); ok {
+		tr.CloseIdleConnections()
 	}
-	c.httpClient.Transport = tr
 }
 
 // Net returns the network type identifier for this client.
@@ -119,7 +126,10 @@ func (c *dohClient) Endpoint() string {
 // The DNS message is serialized in wire format, sent with content-type
 // application/dns-message, and the response is deserialized from wire format.
 func (c *dohClient) Request(ctx context.Context, r *request.Request) (*dns.Msg, error) {
-	return dohRoundTrip(ctx, c.httpClient, c.endpoint, r)
+	c.mu.Lock()
+	hc := c.httpClient
+	c.mu.Unlock()
+	return dohRoundTrip(ctx, hc, c.endpoint, r)
 }
 
 // dohRoundTrip performs a DNS-over-HTTPS round trip using the given http.Client.

@@ -31,6 +31,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -172,12 +173,12 @@ func newDoH3TestServer(t *testing.T, handler dns.HandlerFunc) *doh3TestServer { 
 	}
 }
 
-// closeDoH3Client shuts down the underlying QUIC transport so that its background goroutines
-// are cleaned up. This prevents goleak from flagging them.
+// closeDoH3Client shuts down the underlying QUIC transport(s) so that their background goroutines
+// are cleaned up. This includes any orphaned transports from previous SetTLSConfig calls.
 func closeDoH3Client(t *testing.T, c Client) {
 	t.Helper()
 	if dc, ok := c.(*doh3Client); ok {
-		require.NoError(t, dc.transport.Close())
+		dc.closeTransports()
 	}
 }
 
@@ -515,6 +516,44 @@ func TestDoH3ClientSetTLSConfig(t *testing.T) {
 	dc, ok := c.(*doh3Client)
 	require.True(t, ok)
 	require.GreaterOrEqual(t, dc.transport.TLSClientConfig.MinVersion, uint16(tls.VersionTLS13))
+}
+
+// TestDoH3ClientSetTLSConfigConcurrent verifies that concurrent calls to SetTLSConfig
+// and Request do not trigger a data race. Run with -race to detect races.
+func TestDoH3ClientSetTLSConfigConcurrent(t *testing.T) {
+	srv := newDoH3TestServer(t, func(w dns.ResponseWriter, r *dns.Msg) {
+		msg := new(dns.Msg)
+		msg.SetReply(r)
+		logErrIfNotNil(w.WriteMsg(msg))
+	})
+	defer srv.close()
+
+	c := newDoH3ClientWithTLS("https://"+srv.addr+"/dns-query", srv.clientTLS)
+	defer closeDoH3Client(t, c)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	// Concurrent SetTLSConfig calls.
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.SetTLSConfig(srv.clientTLS.Clone())
+		}()
+	}
+	// Concurrent Request calls.
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req := new(dns.Msg)
+			req.SetQuestion("race.example.com.", dns.TypeA)
+			_, _ = c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
+		}()
+	}
+	wg.Wait()
 }
 
 // TestDoH3ClientTLSMinVersion verifies that the DoH3 client always enforces TLS 1.3 minimum,
