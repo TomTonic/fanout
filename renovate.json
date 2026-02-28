@@ -53,6 +53,24 @@
         "dependencies",
         "major-update"
       ]
+    },
+    {
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchPackageNames": [
+        "github.com/coredns/caddy"
+      ],
+      "allowedVersions": "<2.0.0"
+    },
+    {
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchPackageNames": [
+        "github.com/coredns/caddy/v2"
+      ],
+      "enabled": false
     }
   ],
   "customManagers": [

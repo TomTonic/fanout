@@ -28,8 +28,16 @@ import (
 	"github.com/coredns/caddy"
 )
 
+// TestSetup is a comprehensive table-driven test for Corefile parsing via parseFanout.
+// Covers 9 valid configurations (minimal, weighted-random with load-factor, except + worker-count,
+// two hosts with TCP, worker-count + timeout, attempt-count, default load-factor, sequential policy)
+// and 12 invalid configurations (bad host, bad from, worker-count too low, non-integer worker-count,
+// invalid except domain, unknown network, negative server-count, load-factor too high/zero/count
+// mismatch, missing load-factor args). For valid cases, asserts From, Timeout, Attempts, WorkerCount,
+// net, serverCount, policyType, loadFactor, ExcludeDomains, and client endpoints.
 func TestSetup(t *testing.T) {
 	tests := []struct {
+		name                string
 		input               string
 		expectedFrom        string
 		expectedTo          []string
@@ -44,96 +52,103 @@ func TestSetup(t *testing.T) {
 		expectedErr         string
 	}{
 		// positive
-		{input: "fanout . 127.0.0.1 {\npolicy weighted-random \nweighted-random-server-count 5 weighted-random-load-factor 100\n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 1, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedServerCount: 1, expectedLoadFactor: []int{100}, expectedPolicy: policyWeightedRandom},
-		{input: "fanout . 127.0.0.1", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 1, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedServerCount: 1, expectedLoadFactor: nil, expectedPolicy: ""},
-		{input: "fanout . 127.0.0.1 {\npolicy weighted-random \nserver-count 5 load-factor 100\n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 1, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedServerCount: 1, expectedLoadFactor: []int{100}, expectedPolicy: policyWeightedRandom},
-		{input: "fanout . 127.0.0.1 {\nexcept a b\nworker-count 3\n}", expectedFrom: ".", expectedTimeout: defaultTimeout, expectedAttempts: 3, expectedWorkers: 1, expectedIgnored: []string{"a.", "b."}, expectedNetwork: "udp", expectedServerCount: 1, expectedLoadFactor: nil, expectedPolicy: ""},
-		{input: "fanout . 127.0.0.1 127.0.0.2 {\nnetwork tcp\n}", expectedFrom: ".", expectedTimeout: defaultTimeout, expectedAttempts: 3, expectedWorkers: 2, expectedNetwork: "tcp", expectedTo: []string{"127.0.0.1:53", "127.0.0.2:53"}, expectedServerCount: 2, expectedLoadFactor: nil, expectedPolicy: ""},
-		{input: "fanout . 127.0.0.1 127.0.0.2 127.0.0.3 127.0.0.4 {\nworker-count 3\ntimeout 1m\n}", expectedTimeout: time.Minute, expectedAttempts: 3, expectedFrom: ".", expectedWorkers: 3, expectedNetwork: "udp", expectedServerCount: 4, expectedLoadFactor: nil, expectedPolicy: ""},
-		{input: "fanout . 127.0.0.1 127.0.0.2 127.0.0.3 127.0.0.4 {\nattempt-count 2\n}", expectedTimeout: defaultTimeout, expectedFrom: ".", expectedAttempts: 2, expectedWorkers: 4, expectedNetwork: "udp", expectedServerCount: 4, expectedLoadFactor: nil, expectedPolicy: ""},
-		{input: "fanout . 127.0.0.1 127.0.0.2 127.0.0.3 {\npolicy weighted-random \n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 3, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedServerCount: 3, expectedLoadFactor: []int{100, 100, 100}, expectedPolicy: policyWeightedRandom},
-		{input: "fanout . 127.0.0.1 127.0.0.2 127.0.0.3 {\npolicy sequential\nworker-count 3\n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 3, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedServerCount: 3, expectedLoadFactor: nil, expectedPolicy: policySequential},
+		{name: "weighted-random-with-load-factor", input: "fanout . 127.0.0.1 {\npolicy weighted-random \nweighted-random-server-count 5 weighted-random-load-factor 100\n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 1, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedServerCount: 1, expectedLoadFactor: []int{100}, expectedPolicy: policyWeightedRandom},
+		{name: "minimal-config", input: "fanout . 127.0.0.1", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 1, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedServerCount: 1, expectedLoadFactor: nil, expectedPolicy: ""},
+		{name: "weighted-random-short-aliases", input: "fanout . 127.0.0.1 {\npolicy weighted-random \nweighted-random-server-count 5\nweighted-random-load-factor 100\n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 1, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedServerCount: 1, expectedLoadFactor: []int{100}, expectedPolicy: policyWeightedRandom},
+		{name: "except-and-worker-count", input: "fanout . 127.0.0.1 {\nexcept a b\nworker-count 3\n}", expectedFrom: ".", expectedTimeout: defaultTimeout, expectedAttempts: 3, expectedWorkers: 1, expectedIgnored: []string{"a.", "b."}, expectedNetwork: "udp", expectedServerCount: 1, expectedLoadFactor: nil, expectedPolicy: ""},
+		{name: "two-hosts-tcp", input: "fanout . 127.0.0.1 127.0.0.2 {\nnetwork tcp\n}", expectedFrom: ".", expectedTimeout: defaultTimeout, expectedAttempts: 3, expectedWorkers: 2, expectedNetwork: "tcp", expectedTo: []string{"127.0.0.1:53", "127.0.0.2:53"}, expectedServerCount: 2, expectedLoadFactor: nil, expectedPolicy: ""},
+		{name: "worker-count-and-timeout", input: "fanout . 127.0.0.1 127.0.0.2 127.0.0.3 127.0.0.4 {\nworker-count 3\ntimeout 1m\n}", expectedTimeout: time.Minute, expectedAttempts: 3, expectedFrom: ".", expectedWorkers: 3, expectedNetwork: "udp", expectedServerCount: 4, expectedLoadFactor: nil, expectedPolicy: ""},
+		{name: "attempt-count", input: "fanout . 127.0.0.1 127.0.0.2 127.0.0.3 127.0.0.4 {\nattempt-count 2\n}", expectedTimeout: defaultTimeout, expectedFrom: ".", expectedAttempts: 2, expectedWorkers: 4, expectedNetwork: "udp", expectedServerCount: 4, expectedLoadFactor: nil, expectedPolicy: ""},
+		{name: "weighted-random-default-load-factor", input: "fanout . 127.0.0.1 127.0.0.2 127.0.0.3 {\npolicy weighted-random \n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 3, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedServerCount: 3, expectedLoadFactor: []int{100, 100, 100}, expectedPolicy: policyWeightedRandom},
+		{name: "sequential-policy", input: "fanout . 127.0.0.1 127.0.0.2 127.0.0.3 {\npolicy sequential\nworker-count 3\n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 3, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedServerCount: 3, expectedLoadFactor: nil, expectedPolicy: policySequential},
 
 		// negative
-		{input: "fanout . aaa", expectedErr: "not an IP address or file"},
-		{input: "fanout .: aaa", expectedErr: "unable to normalize '.:'"},
-		{input: "fanout . 127.0.0.1 {\nexcept a b\nworker-count 1\n}", expectedErr: "use Forward plugin"},
-		{input: "fanout . 127.0.0.1 {\nexcept a b\nworker-count ten\n}", expectedErr: "'ten'"},
-		{input: "fanout . 127.0.0.1 {\nexcept a:\nworker-count ten\n}", expectedErr: "unable to normalize 'a:'"},
-		{input: "fanout . 127.0.0.1 127.0.0.2 {\nnetwork XXX\n}", expectedErr: "unknown network protocol"},
-		{input: "fanout . 127.0.0.1 {\npolicy weighted-random \nweighted-random-server-count -100\n}", expectedErr: "Wrong argument count or unexpected line ending"},
-		{input: "fanout . 127.0.0.1 {\npolicy weighted-random \nweighted-random-load-factor 150\n}", expectedErr: "load-factor 150 should be less than 100"},
-		{input: "fanout . 127.0.0.1 {\npolicy weighted-random \nweighted-random-load-factor 0\n}", expectedErr: "load-factor should be more or equal 1"},
-		{input: "fanout . 127.0.0.1 {\npolicy weighted-random \nweighted-random-load-factor 50 100\n}", expectedErr: "load-factor params count must be the same as the number of hosts"},
-		{input: "fanout . 127.0.0.1 127.0.0.2 {\npolicy weighted-random \nweighted-random-load-factor 50\n}", expectedErr: "load-factor params count must be the same as the number of hosts"},
-		{input: "fanout . 127.0.0.1 127.0.0.2 {\npolicy weighted-random \nweighted-random-load-factor \n}", expectedErr: "Wrong argument count or unexpected line ending"},
+		{name: "err-invalid-host", input: "fanout . aaa", expectedErr: "not an IP address or file"},
+		{name: "err-invalid-from", input: "fanout .: aaa", expectedErr: "unable to normalize '.:'"},
+		{name: "err-worker-count-too-low", input: "fanout . 127.0.0.1 {\nexcept a b\nworker-count 1\n}", expectedErr: "use Forward plugin"},
+		{name: "err-worker-count-not-int", input: "fanout . 127.0.0.1 {\nexcept a b\nworker-count ten\n}", expectedErr: "'ten'"},
+		{name: "err-invalid-except-domain", input: "fanout . 127.0.0.1 {\nexcept a:\nworker-count ten\n}", expectedErr: "unable to normalize 'a:'"},
+		{name: "err-unknown-network", input: "fanout . 127.0.0.1 127.0.0.2 {\nnetwork XXX\n}", expectedErr: "unknown network protocol"},
+		{name: "err-negative-server-count", input: "fanout . 127.0.0.1 {\npolicy weighted-random \nweighted-random-server-count -100\n}", expectedErr: "Wrong argument count or unexpected line ending"},
+		{name: "err-load-factor-too-high", input: "fanout . 127.0.0.1 {\npolicy weighted-random \nweighted-random-load-factor 150\n}", expectedErr: "load-factor 150 should be less than 100"},
+		{name: "err-load-factor-zero", input: "fanout . 127.0.0.1 {\npolicy weighted-random \nweighted-random-load-factor 0\n}", expectedErr: "load-factor should be more or equal 1"},
+		{name: "err-load-factor-count-mismatch-more", input: "fanout . 127.0.0.1 {\npolicy weighted-random \nweighted-random-load-factor 50 100\n}", expectedErr: "load-factor params count must be the same as the number of hosts"},
+		{name: "err-load-factor-count-mismatch-less", input: "fanout . 127.0.0.1 127.0.0.2 {\npolicy weighted-random \nweighted-random-load-factor 50\n}", expectedErr: "load-factor params count must be the same as the number of hosts"},
+		{name: "err-load-factor-missing-args", input: "fanout . 127.0.0.1 127.0.0.2 {\npolicy weighted-random \nweighted-random-load-factor \n}", expectedErr: "Wrong argument count or unexpected line ending"},
 	}
 
-	for i, test := range tests {
-		c := caddy.NewTestController("dns", test.input)
-		f, err := parseFanout(c)
-		if test.expectedErr != "" && err == nil {
-			t.Fatalf("Test %d: expected error but not found errors", i)
-		}
-
-		if err != nil {
-			if !strings.Contains(err.Error(), test.expectedErr) {
-				t.Fatalf("Test %d: expected error to contain: %v, found error: %v, input: %s", i, test.expectedErr, err, test.input)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := caddy.NewTestController("dns", tc.input)
+			f, err := parseFanout(c)
+			if tc.expectedErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q but got none", tc.expectedErr)
+				}
+				if !strings.Contains(err.Error(), tc.expectedErr) {
+					t.Fatalf("expected error to contain: %v, found error: %v", tc.expectedErr, err)
+				}
+				return
 			}
-			continue
-		}
-		if f.Timeout != test.expectedTimeout {
-			t.Fatalf("Test %d: expected: %d, got: %d", i, test.expectedTimeout, f.Timeout)
-		}
-		if f.Attempts != test.expectedAttempts {
-			t.Fatalf("Test %d: expected: %d, got: %d", i, test.expectedAttempts, f.Attempts)
-		}
-		if f.From != test.expectedFrom && test.expectedFrom != "" {
-			t.Fatalf("Test %d: expected: %s, got: %s", i, test.expectedFrom, f.From)
-		}
-		if test.expectedIgnored != nil {
-			for _, expected := range test.expectedIgnored {
-				if !f.ExcludeDomains.Contains(expected) {
-					t.Fatalf("Test %d: missed exclude domain name: %v", i, test.expectedIgnored)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if f.Timeout != tc.expectedTimeout {
+				t.Fatalf("expected timeout: %v, got: %v", tc.expectedTimeout, f.Timeout)
+			}
+			if f.Attempts != tc.expectedAttempts {
+				t.Fatalf("expected attempts: %d, got: %d", tc.expectedAttempts, f.Attempts)
+			}
+			if f.From != tc.expectedFrom && tc.expectedFrom != "" {
+				t.Fatalf("expected from: %s, got: %s", tc.expectedFrom, f.From)
+			}
+			if tc.expectedIgnored != nil {
+				for _, expected := range tc.expectedIgnored {
+					if !f.ExcludeDomains.Contains(expected) {
+						t.Fatalf("missed exclude domain name: %v", tc.expectedIgnored)
+					}
 				}
 			}
-		}
-		if test.expectedTo != nil {
-			var to []string
-			for j := 0; j < len(f.clients); j++ {
-				to = append(to, f.clients[j].Endpoint())
+			if tc.expectedTo != nil {
+				var to []string
+				for j := 0; j < len(f.clients); j++ {
+					to = append(to, f.clients[j].Endpoint())
+				}
+				if !reflect.DeepEqual(to, tc.expectedTo) {
+					t.Fatalf("expected: %q, actual: %q", tc.expectedTo, to)
+				}
 			}
-			if !reflect.DeepEqual(to, test.expectedTo) {
-				t.Fatalf("Test %d: expected: %q, actual: %q", i, test.expectedTo, to)
+			if f.WorkerCount != tc.expectedWorkers {
+				t.Fatalf("expected workers: %d, got: %d", tc.expectedWorkers, f.WorkerCount)
 			}
-		}
-		if f.WorkerCount != test.expectedWorkers {
-			t.Fatalf("Test %d: expected: %d, got: %d", i, test.expectedWorkers, f.WorkerCount)
-		}
-		if f.net != test.expectedNetwork {
-			t.Fatalf("Test %d: expected: %v, got: %v", i, test.expectedNetwork, f.net)
-		}
-		if f.serverCount != test.expectedServerCount {
-			t.Fatalf("Test %d: expected: %d, got: %d", i, test.expectedServerCount, f.serverCount)
-		}
-		if f.policyType != test.expectedPolicy {
-			t.Fatalf("Test %d: expected: %s, got: %s", i, test.expectedPolicy, f.policyType)
-		}
+			if f.net != tc.expectedNetwork {
+				t.Fatalf("expected network: %v, got: %v", tc.expectedNetwork, f.net)
+			}
+			if f.serverCount != tc.expectedServerCount {
+				t.Fatalf("expected serverCount: %d, got: %d", tc.expectedServerCount, f.serverCount)
+			}
+			if f.policyType != tc.expectedPolicy {
+				t.Fatalf("expected policy: %s, got: %s", tc.expectedPolicy, f.policyType)
+			}
 
-		selectionPolicy, ok := f.ServerSelectionPolicy.(*WeightedPolicy)
-		if len(test.expectedLoadFactor) > 0 {
-			if !ok {
-				t.Fatalf("Test %d: expected weighted policy to be set, got: %T", i, f.ServerSelectionPolicy)
+			selectionPolicy, ok := f.ServerSelectionPolicy.(*WeightedPolicy)
+			if len(tc.expectedLoadFactor) > 0 {
+				if !ok {
+					t.Fatalf("expected weighted policy to be set, got: %T", f.ServerSelectionPolicy)
+				}
+				if !reflect.DeepEqual(selectionPolicy.loadFactor, tc.expectedLoadFactor) {
+					t.Fatalf("expected loadFactor: %d, got: %d", tc.expectedLoadFactor, selectionPolicy.loadFactor)
+				}
+			} else if ok {
+				t.Fatalf("expected sequential policy to be set, got: %T", f.ServerSelectionPolicy)
 			}
-			if !reflect.DeepEqual(selectionPolicy.loadFactor, test.expectedLoadFactor) {
-				t.Fatalf("Test %d: expected: %d, got: %d", i, test.expectedLoadFactor, selectionPolicy.loadFactor)
-			}
-		} else if ok {
-			t.Fatalf("Test %d: expected sequential policy to be set, got: %T", i, f.ServerSelectionPolicy)
-		}
+		})
 	}
 }
 
+// TestSetupResolvconf verifies that during Corefile parsing, if the upstream argument is a
+// resolv.conf-format file, parseFanout extracts nameserver addresses from it.
+// Writes a resolv.conf with two nameservers and verifies both appear as client endpoints with port 53.
 func TestSetupResolvconf(t *testing.T) {
 	const resolv = "resolv.conf"
 	if err := os.WriteFile(resolv,

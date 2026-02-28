@@ -26,6 +26,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestDomainBasic verifies basic parent/child containment in the Domain trie used by the except /
+// except-file directives. The trie is checked on every incoming query to decide whether to skip fanout.
+// Ensures "." matches everything, "org." matches "example.org.", but "example.org." does not match "org.".
 func TestDomainBasic(t *testing.T) {
 	samples := []struct {
 		child    string
@@ -47,6 +50,9 @@ func TestDomainBasic(t *testing.T) {
 	}
 }
 
+// TestDomainGet verifies the internal structure of the Domain trie used for domain exclusion.
+// After adding "google.com." and "example.com.", navigating . → com → google must reach a final node.
+// Ensures the tree is built in reverse-label order as expected.
 func TestDomainGet(t *testing.T) {
 	d := NewDomain()
 	d.AddString("google.com.")
@@ -54,6 +60,9 @@ func TestDomainGet(t *testing.T) {
 	require.True(t, d.Get(".").Get("com").Get("google").IsFinal())
 }
 
+// TestDomain_ContainsShouldWorkFast is a performance guard for the domain-exclusion lookup that
+// runs on every DNS query. Inserts 10 000 random domain names into the trie, then asserts that
+// 10 000 Contains() calls complete in under 250 ms.
 func TestDomain_ContainsShouldWorkFast(t *testing.T) {
 	var samples []string
 	d := NewDomain()
@@ -70,6 +79,8 @@ func TestDomain_ContainsShouldWorkFast(t *testing.T) {
 	require.True(t, time.Since(start) < time.Second/4)
 }
 
+// TestDomainFewEntries verifies that two sibling domains (google.com., example.com.) are stored
+// independently in the Domain trie and that their common parent "com." alone does not match.
 func TestDomainFewEntries(t *testing.T) {
 	d := NewDomain()
 	d.AddString("google.com.")
@@ -79,6 +90,9 @@ func TestDomainFewEntries(t *testing.T) {
 	require.False(t, d.Contains("com."))
 }
 
+// TestDomain_DoNotStoreExtraEntries verifies that when a broader domain (example.com.) is already
+// in the trie, adding a more specific subdomain (advanced.example.com.) is a no-op.
+// The trie stays minimal because the broader rule already covers all subdomains.
 func TestDomain_DoNotStoreExtraEntries(t *testing.T) {
 	d := NewDomain()
 	d.AddString("example.com.")
