@@ -35,10 +35,6 @@ import (
 // doqALPN is the ALPN token for DNS over QUIC as specified in RFC 9250 §7.2.
 const doqALPN = "doq"
 
-// doqMaxMessageSize is the maximum DNS message payload allowed over DoQ (64 KiB).
-// This protects against excessive memory consumption from malicious peers.
-const doqMaxMessageSize = 64 * 1024
-
 // doqNoError is the DoQ error code for a clean close (RFC 9250 §8.4).
 const doqNoError quic.ApplicationErrorCode = 0x0
 
@@ -220,7 +216,7 @@ func (c *doqClient) readResponse(ctx context.Context, stream *quic.Stream, origI
 		return nil, errors.Wrap(err, "DoQ: failed to read response length prefix")
 	}
 	respLen := binary.BigEndian.Uint16(lenBuf[:])
-	if respLen == 0 || int(respLen) > doqMaxMessageSize {
+	if respLen == 0 {
 		return nil, errors.Errorf("DoQ: invalid response length %d", respLen)
 	}
 
@@ -291,6 +287,12 @@ func (c *doqClient) resetConn() {
 		_ = c.conn.CloseWithError(doqInternalError, "connection reset")
 		c.conn = nil
 	}
+}
+
+// Close releases resources held by this DoQ client (closes the QUIC connection).
+func (c *doqClient) Close() error {
+	c.closeConn()
+	return nil
 }
 
 // closeConn closes the QUIC connection gracefully. Used by tests for cleanup.

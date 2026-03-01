@@ -189,10 +189,7 @@ func (f *Fanout) getFanoutResult(ctx context.Context, responseCh <-chan *respons
 }
 
 func (f *Fanout) match(state *request.Request) bool {
-	if !plugin.Name(f.From).Matches(state.Name()) || f.ExcludeDomains.Contains(state.Name()) {
-		return false
-	}
-	return true
+	return plugin.Name(f.From).Matches(state.Name()) && !f.ExcludeDomains.Contains(state.Name())
 }
 
 func (f *Fanout) processClient(ctx context.Context, c Client, r *request.Request) *response {
