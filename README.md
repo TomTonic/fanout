@@ -59,6 +59,7 @@ fanout FROM TO... {
     attempt-count COUNT
     timeout DURATION
     race
+    race-continue-on-error-response
 }
 ```
 
@@ -86,6 +87,7 @@ fanout FROM TO... {
 * `attempt-count` — the number of failed attempts before considering an upstream to be down. If `0`, the upstream will never be marked as down and the request will run until `timeout`. Default is `3`.
 * `timeout` — the maximum time for the entire request. Default is `30s`.
 * `race` — gives priority to the first result, whether it is negative or not, as long as it is a standard DNS result.
+* `race-continue-on-error-response` — default `false`. When enabled together with `race`, fanout does not early-return on non-success DNS responses (for example `SERVFAIL` or `NXDOMAIN`) and only early-returns on `RcodeSuccess`.
 
 ## Metrics
 
@@ -204,12 +206,33 @@ Send parallel requests to five resolvers but limit to two concurrent workers.
 
 ### Race Mode
 
-Multiple upstreams are configured but one of them is down. With `race` enabled, the first result (even negative/NXDOMAIN) is returned immediately instead of waiting for timeouts.
+Multiple upstreams are configured but one of them is down. With `race` enabled, the first result is returned immediately instead of waiting for timeouts.
 
 ~~~ corefile
 . {
     fanout . 10.0.0.10:53 10.0.0.11:53 10.0.0.12:53 {
         race
+    }
+}
+~~~
+
+Additional note: by default `race` will return the first DNS response that arrives as long as it is a
+standard DNS result — this may be a non-success RCODE such as `SERVFAIL` or `NXDOMAIN`.
+
+If you prefer to keep the latency benefits of `race` but avoid early‑returning on error responses,
+enable `race-continue-on-error-response`. When both `race` and
+`race-continue-on-error-response` are set, fanout will only early‑return for `RcodeSuccess` and will
+wait briefly for a successful response instead of immediately accepting a fast negative result.
+
+Example: fast upstream returns `SERVFAIL`, slow upstream returns `NOERROR` — with
+`race` alone the client receives `SERVFAIL`; with `race` + `race-continue-on-error-response` the
+client receives the successful answer (if it arrives before the request timeout).
+
+~~~ corefile
+. {
+    fanout . 10.0.0.10:53 10.0.0.11:53 10.0.0.12:53 {
+        race
+        race-continue-on-error-response
     }
 }
 ~~~
