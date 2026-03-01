@@ -1,4 +1,5 @@
 // Copyright (c) 2024 MWS and/or its affiliates.
+// Copyright (c) 2026 Tom Gelhausen; contributors: various coding‑agents.
 //
 // SPDX-License-Identifier: Apache-2.0
 //
