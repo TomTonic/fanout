@@ -15,8 +15,8 @@
 - **Formatting**: Use `gofmt`; follow standard Go conventions
 - **Naming**: Standard Go naming (camelCase for unexported, PascalCase for exported)
 - **Comments**: Public symbols require doc comments; use godoc format
+- **Test cases**: Every test case must be preceded by a concise English comment that describes, from an outside‑in perspective, what the test verifies. The comment should outline the user-facing scenario or contextual behavior being exercised, then narrow down to the specific code paths involved. If the test implicitly covers additional behavior (e.g., shared setup, non‑orthogonal interactions, or side effects), this should be noted as well.
 - **Cyclomatic complexity**: Keep functions under 15 complexity
-- **Dependencies**: No dependencies on `github.com/networkservicemesh/*` except `github.com/networkservicemesh/api`
 - **go.mod**: No `replace` directives allowed; run `go mod tidy` after dependency changes
 - Align the happy path to the left edge
 
