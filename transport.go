@@ -36,6 +36,8 @@ type Transport interface {
 	// For failed connections, call conn.Close() instead.
 	Yield(conn *dns.Conn)
 	SetTLSConfig(*tls.Config)
+	// Close drains the connection pool and releases resources.
+	Close()
 }
 
 // NewTransport creates new transport with address
@@ -58,6 +60,18 @@ func (t *transportImpl) SetTLSConfig(c *tls.Config) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.tlsConfig = c
+}
+
+// Close drains pooled connections and releases resources.
+func (t *transportImpl) Close() {
+	for {
+		select {
+		case conn := <-t.pool:
+			_ = conn.Close()
+		default:
+			return
+		}
+	}
 }
 
 // Yield returns a connection to the pool for reuse.

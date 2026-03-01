@@ -31,6 +31,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -330,6 +331,42 @@ func TestDoHClientSetTLSConfig(t *testing.T) {
 		ServerName: "dns.google",
 	})
 	require.Equal(t, DOH, c.Net())
+}
+
+// TestDoHClientSetTLSConfigConcurrent verifies that concurrent calls to SetTLSConfig
+// and Request do not trigger a data race. Run with -race to detect races.
+func TestDoHClientSetTLSConfigConcurrent(t *testing.T) {
+	srv, clientTLS := newDoHTestServer(t, func(w dns.ResponseWriter, r *dns.Msg) {
+		msg := new(dns.Msg)
+		msg.SetReply(r)
+		logErrIfNotNil(w.WriteMsg(msg))
+	})
+	defer srv.Close()
+
+	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	// Concurrent SetTLSConfig calls.
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.SetTLSConfig(clientTLS.Clone())
+		}()
+	}
+	// Concurrent Request calls.
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req := new(dns.Msg)
+			req.SetQuestion("race.example.com.", dns.TypeA)
+			_, _ = c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
+		}()
+	}
+	wg.Wait()
 }
 
 // TestDoHClientMalformedResponse verifies that the DoH client returns an error when

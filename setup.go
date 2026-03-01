@@ -19,6 +19,7 @@
 package fanout
 
 import (
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -50,7 +51,7 @@ func setup(c *caddy.Controller) error {
 		return plugin.Error("fanout", err)
 	}
 	l := len(f.clients)
-	if len(f.clients) > maxIPCount {
+	if l > maxIPCount {
 		return plugin.Error("fanout", errors.Errorf("more than %d TOs configured: %d", maxIPCount, l))
 	}
 
@@ -77,8 +78,13 @@ func (f *Fanout) OnStartup() (err error) {
 	return nil
 }
 
-// OnShutdown stops all configured clients.
+// OnShutdown stops all configured clients and releases their resources.
 func (f *Fanout) OnShutdown() error {
+	for _, c := range f.clients {
+		if cl, ok := c.(io.Closer); ok {
+			_ = cl.Close()
+		}
+	}
 	return nil
 }
 
@@ -93,7 +99,7 @@ func parseFanout(c *caddy.Controller) (*Fanout, error) {
 			return nil, plugin.ErrOnce
 		}
 		i++
-		f, err = parsefanoutStanza(&c.Dispenser)
+		f, err = parseFanoutStanza(&c.Dispenser)
 		if err != nil {
 			return nil, err
 		}
@@ -102,7 +108,7 @@ func parseFanout(c *caddy.Controller) (*Fanout, error) {
 	return f, nil
 }
 
-func parsefanoutStanza(c *caddyfile.Dispenser) (*Fanout, error) {
+func parseFanoutStanza(c *caddyfile.Dispenser) (*Fanout, error) {
 	f := New()
 	if !c.Args(&f.From) {
 		return f, c.ArgErr()

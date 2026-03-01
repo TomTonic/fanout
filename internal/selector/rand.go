@@ -21,7 +21,7 @@ import (
 	"math/rand/v2"
 )
 
-// WeightedRand selector picks elements randomly based on their weights.
+// WeightedRand picks elements randomly based on their weights.
 // It uses math/rand/v2 global functions which are safe for concurrent use.
 type WeightedRand[T any] struct {
 	values      []T
@@ -29,7 +29,7 @@ type WeightedRand[T any] struct {
 	totalWeight int
 }
 
-// NewWeightedRandSelector inits WeightedRand by copying source values and calculating total weight
+// NewWeightedRandSelector initializes a WeightedRand by copying source values and calculating total weight.
 func NewWeightedRandSelector[T any](values []T, weights []int) *WeightedRand[T] {
 	wrs := &WeightedRand[T]{
 		values:      make([]T, len(values)),
@@ -47,7 +47,7 @@ func NewWeightedRandSelector[T any](values []T, weights []int) *WeightedRand[T] 
 	return wrs
 }
 
-// Pick returns randomly chosen element from values based on its weight if any exists
+// Pick returns a randomly chosen element from values based on its weight, if any exists.
 func (wrs *WeightedRand[T]) Pick() T {
 	var defaultVal T
 	if len(wrs.values) == 0 {

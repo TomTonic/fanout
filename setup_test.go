@@ -19,13 +19,18 @@
 package fanout
 
 import (
+	"context"
+	"crypto/tls"
 	"os"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/coredns/caddy"
+	"github.com/coredns/coredns/request"
+	"github.com/miekg/dns"
 )
 
 // TestSetup is a comprehensive table-driven test for Corefile parsing via parseFanout.
@@ -196,5 +201,46 @@ nameserver 10.10.255.253`), 0o600); err != nil {
 				}
 			}
 		}
+	}
+}
+
+// closableClient is a test double that implements both Client and io.Closer,
+// tracking whether Close was called.
+type closableClient struct {
+	closed atomic.Bool
+	addr   string
+}
+
+func (c *closableClient) Request(_ context.Context, _ *request.Request) (*dns.Msg, error) {
+	return nil, nil
+}
+func (c *closableClient) Endpoint() string           { return c.addr }
+func (c *closableClient) Net() string                { return UDP }
+func (c *closableClient) SetTLSConfig(_ *tls.Config) {}
+func (c *closableClient) Close() error {
+	c.closed.Store(true)
+	return nil
+}
+
+// TestOnShutdown verifies that OnShutdown closes all clients that implement io.Closer.
+// This ensures resources such as connection pools, QUIC transports, and HTTP transports
+// are released during plugin shutdown, preventing goroutine leaks.
+func TestOnShutdown(t *testing.T) {
+	f := New()
+	c1 := &closableClient{addr: "127.0.0.1:53"}
+	c2 := &closableClient{addr: "127.0.0.2:53"}
+	f.AddClient(c1)
+	f.AddClient(c2)
+
+	err := f.OnShutdown()
+	if err != nil {
+		t.Fatalf("OnShutdown returned unexpected error: %v", err)
+	}
+
+	if !c1.closed.Load() {
+		t.Error("expected client 1 to be closed after OnShutdown")
+	}
+	if !c2.closed.Load() {
+		t.Error("expected client 2 to be closed after OnShutdown")
 	}
 }

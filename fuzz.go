@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// +build gofuzz
+//go:build gofuzz
 
 package fanout
 
@@ -27,16 +27,16 @@ import (
 
 var f *Fanout
 
-// abuse init to setup an environment to test against. This start another server to that will
-// reflect responses.
+// init sets up an environment to fuzz against. It starts a reflect server
+// and registers two clients (TCP + UDP) so the fanout plugin has upstreams.
 func init() {
 	f = New()
 	s := dnstest.NewServer(r{}.reflectHandler)
-	f.clients = append(f.clients, NewClient(s.Addr, "tcp"))
-	f.clients = append(f.clients, NewClient(s.Addr, "udp"))
+	f.AddClient(NewClient(s.Addr, "tcp"))
+	f.AddClient(NewClient(s.Addr, "udp"))
 }
 
-// Fuzz fuzzes fanaot.
+// Fuzz fuzzes fanout.
 func Fuzz(data []byte) int {
 	return fuzz.Do(f, data)
 }
@@ -46,5 +46,5 @@ type r struct{}
 func (r r) reflectHandler(w dns.ResponseWriter, req *dns.Msg) {
 	m := new(dns.Msg)
 	m.SetReply(req)
-	w.WriteMsg(m)
+	w.WriteMsg(m) //nolint:errcheck // best-effort in test helper
 }
