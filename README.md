@@ -1,6 +1,7 @@
 # fanout
 
-![ci](https://github.com/TomTonic/fanout/workflows/ci/badge.svg)
+[![Go Report Card](https://goreportcard.com/badge/github.com/TomTonic/fanout)](https://goreportcard.com/report/github.com/TomTonic/fanout)
+![CI](https://github.com/TomTonic/fanout/workflows/ci/badge.svg)
 
 ## About This Fork
 
