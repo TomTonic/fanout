@@ -16,13 +16,13 @@
 
 package selector
 
-// Sequential selector acts like a queue and picks elements one-by-one starting from the first element
+// Sequential acts like a queue and picks elements one-by-one starting from the first element.
 type Sequential[T any] struct {
 	values []T
 	idx    int
 }
 
-// NewSequentialSelector inits Sequential selector with default starting index 0
+// NewSequentialSelector initializes a Sequential selector with default starting index 0.
 func NewSequentialSelector[T any](values []T) *Sequential[T] {
 	return &Sequential[T]{
 		values: values,
@@ -30,8 +30,8 @@ func NewSequentialSelector[T any](values []T) *Sequential[T] {
 	}
 }
 
-// Pick returns next available element from values array if exists.
-// Returns default value of type T otherwise
+// Pick returns the next available element from the values array if one exists.
+// Returns the zero value of type T otherwise.
 func (s *Sequential[T]) Pick() T {
 	var result T
 	if s.idx >= len(s.values) {
