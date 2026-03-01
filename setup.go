@@ -284,6 +284,8 @@ func parseValue(v string, f *Fanout, c *caddyfile.Dispenser) error {
 		return parseTimeout(f, c)
 	case "race":
 		return parseRace(f, c)
+	case "race-continue-on-error-response":
+		return parseRaceContinueOnErrorResponse(f, c)
 	case "except":
 		return parseIgnored(f, c)
 	case "except-file":
@@ -335,6 +337,14 @@ func parseRace(f *Fanout, c *caddyfile.Dispenser) error {
 		return c.ArgErr()
 	}
 	f.Race = true
+	return nil
+}
+
+func parseRaceContinueOnErrorResponse(f *Fanout, c *caddyfile.Dispenser) error {
+	if c.NextArg() {
+		return c.ArgErr()
+	}
+	f.RaceContinueOnErrorResponse = true
 	return nil
 }
 
