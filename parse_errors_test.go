@@ -44,6 +44,7 @@ func TestParseErrors(t *testing.T) {
 		{name: "err-missing-except", input: "fanout . 127.0.0.1 {\nexcept\n}", expectedErr: "Wrong argument count"},
 		{name: "err-too-many-tls-args", input: "fanout . 127.0.0.1 {\ntls 1 2 3 4\n}", expectedErr: "Wrong argument count"},
 		{name: "err-too-many-race-args", input: "fanout . 127.0.0.1 {\nrace 1\n}", expectedErr: "Wrong argument count"},
+		{name: "err-too-many-race-continue-on-error-response-args", input: "fanout . 127.0.0.1 {\nrace-continue-on-error-response 1\n}", expectedErr: "Wrong argument count"},
 		{name: "err-no-to-hosts", input: "fanout .", expectedErr: "Wrong argument count"},
 		{name: "err-except-file-escape", input: "fanout . 127.0.0.1 {\nexcept-file ../file.txt\n}", expectedErr: "path must be local"},
 		{name: "err-timeout-parse", input: "fanout . 127.0.0.1 {\ntimeout asd\n}", expectedErr: "invalid duration"},

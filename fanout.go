@@ -38,14 +38,15 @@ var log = clog.NewWithPlugin("fanout")
 
 // Fanout represents a plugin instance that can do async requests to list of DNS servers.
 type Fanout struct {
-	clients        []Client
-	tlsConfig      *tls.Config
-	ExcludeDomains Domain
-	tlsServerName  string
-	Timeout        time.Duration
-	Race           bool
-	net            string
-	From           string
+	clients                     []Client
+	tlsConfig                   *tls.Config
+	ExcludeDomains              Domain
+	tlsServerName               string
+	Timeout                     time.Duration
+	Race                        bool
+	RaceContinueOnErrorResponse bool
+	net                         string
+	From                        string
 	// Attempts is the number of times to retry a failed upstream request.
 	// A value of 0 means infinite retries (bounded only by Timeout).
 	Attempts              int
@@ -178,7 +179,9 @@ func (f *Fanout) getFanoutResult(ctx context.Context, responseCh <-chan *respons
 				break
 			}
 			if f.Race {
-				return r
+				if !f.RaceContinueOnErrorResponse || r.response.Rcode == dns.RcodeSuccess {
+					return r
+				}
 			}
 			if r.response.Rcode != dns.RcodeSuccess {
 				break
