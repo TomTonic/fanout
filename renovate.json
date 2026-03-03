@@ -29,6 +29,22 @@
   "packageRules": [
     {
       "matchManagers": [
+        "gomod"
+      ],
+      "matchDepNames": [
+        "go"
+      ],
+      "matchDepTypes": [
+        "golang"
+      ],
+      "matchUpdateTypes": [
+        "patch"
+      ],
+      "rangeStrategy": "bump",
+      "groupName": "go patch updates"
+    },
+    {
+      "matchManagers": [
         "github-actions"
       ],
       "groupName": "github actions"
@@ -80,8 +96,7 @@
       "managerFilePatterns": [
         "/^\\.github\\/workflows\\/.*\\.ya?ml$/"
       ],
-      "matchStrings": [
-        "GO_VERSION:\\s*'?(?<currentValue>\\d+\\.\\d+)'?"
+      "matchStrings": [ "GO_VERSION:\s'?(?<currentValue>\d+\.\d+)'?"
       ],
       "depNameTemplate": "go",
       "datasourceTemplate": "golang-version",
