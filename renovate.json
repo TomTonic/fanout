@@ -40,7 +40,6 @@
       "matchUpdateTypes": [
         "patch"
       ],
-      "rangeStrategy": "bump",
       "groupName": "go patch updates"
     },
     {
