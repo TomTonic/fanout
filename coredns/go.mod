@@ -1,6 +1,6 @@
 module github.com/TomTonic/fanout/coredns
 
-go 1.25.7
+go 1.26.0
 
 require (
 	github.com/TomTonic/fanout v1.11.5
