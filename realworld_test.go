@@ -26,19 +26,23 @@ package fanout
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/coredns/coredns/plugin/test"
 	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -57,6 +61,9 @@ const (
 
 	// realWorldTimeout is the maximum time for each real-world query.
 	realWorldTimeout = 10 * time.Second
+
+	reasonTLSIntercept = "tls certificate validation failed (possible TLS interception or certificate substitution)"
+	reasonNetBlocked   = "network policy/firewall blocks required DNS transport"
 )
 
 var (
@@ -155,41 +162,84 @@ func requireRealWorldCapability(t *testing.T, capability string, probe func(cont
 	realWorldCapabilityCache.Store(capability, realWorldCapabilityResult{})
 }
 
-func classifyRealWorldRestriction(err error) (bool, string) {
+func classifyRealWorldRestriction(err error) (blocked bool, reason string) {
 	if err == nil {
 		return false, ""
 	}
 
-	errStr := strings.ToLower(err.Error())
-
-	if strings.Contains(errStr, "failed to verify certificate") ||
-		strings.Contains(errStr, "x509: certificate is valid for") ||
-		strings.Contains(errStr, "certificate signed by unknown authority") ||
-		strings.Contains(errStr, "certificate is not valid for") {
-		return true, "tls certificate validation failed (possible TLS interception or certificate substitution)"
+	// Prefer typed checks to stay stable across Go/runtime/OS error message variations.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true, reasonNetBlocked
 	}
 
+	if isTLSEnvironmentRestriction(err) {
+		return true, reasonTLSIntercept
+	}
+
+	if isNetworkEnvironmentRestriction(err) {
+		return true, reasonNetBlocked
+	}
+
+	errStr := strings.ToLower(err.Error())
+
+	// Fallback for edge cases where underlying typed errors are not exposed.
 	if strings.Contains(errStr, "no recent network activity") ||
 		strings.Contains(errStr, "timeout") ||
 		strings.Contains(errStr, "context deadline exceeded") ||
-		strings.Contains(errStr, "network is unreachable") ||
-		strings.Contains(errStr, "connection refused") ||
-		strings.Contains(errStr, "connection reset by peer") ||
 		strings.Contains(errStr, "eof") ||
 		strings.Contains(errStr, "remote error: tls") ||
 		strings.Contains(errStr, "tls: handshake failure") ||
-		strings.Contains(errStr, "handshake failure") ||
-		strings.Contains(errStr, "operation not permitted") ||
-		strings.Contains(errStr, "no route to host") ||
-		strings.Contains(errStr, "permission denied") {
-		return true, "network policy/firewall blocks required DNS transport"
-	}
-
-	if strings.Contains(errStr, "dnsblocknotice") {
-		return true, "dns traffic intercepted by environment block page/certificate"
+		strings.Contains(errStr, "handshake failure") {
+		return true, reasonNetBlocked
 	}
 
 	return false, ""
+}
+
+func isTLSEnvironmentRestriction(err error) bool {
+	var unknownAuthorityErr x509.UnknownAuthorityError
+	if errors.As(err, &unknownAuthorityErr) {
+		return true
+	}
+
+	var hostnameErr x509.HostnameError
+	if errors.As(err, &hostnameErr) {
+		return true
+	}
+
+	var certInvalidErr x509.CertificateInvalidError
+	if errors.As(err, &certInvalidErr) {
+		return true
+	}
+
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "failed to verify certificate") ||
+		strings.Contains(errStr, "x509: certificate is valid for") ||
+		strings.Contains(errStr, "certificate signed by unknown authority") ||
+		strings.Contains(errStr, "certificate is not valid for")
+}
+
+func isNetworkEnvironmentRestriction(err error) bool {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
+	if errors.Is(err, io.EOF) {
+		return true
+	}
+
+	// Handle common cross-platform socket failures.
+	if errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ENETUNREACH) ||
+		errors.Is(err, syscall.EHOSTUNREACH) ||
+		errors.Is(err, syscall.EPERM) ||
+		errors.Is(err, syscall.EACCES) {
+		return true
+	}
+
+	return false
 }
 
 func normalizeRealWorldProtocolName(name string) string {
