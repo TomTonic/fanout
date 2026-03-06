@@ -26,15 +26,23 @@ package fanout
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"io"
 	"net"
+	"os"
+	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/coredns/coredns/plugin/test"
 	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,12 +61,206 @@ const (
 
 	// realWorldTimeout is the maximum time for each real-world query.
 	realWorldTimeout = 10 * time.Second
+
+	reasonTLSIntercept = "tls certificate validation failed (possible TLS interception or certificate substitution)"
+	reasonNetBlocked   = "network policy/firewall blocks required DNS transport"
 )
+
+var (
+	realWorldCapabilityCache sync.Map // map[string]realWorldCapabilityResult
+
+	realWorldSkipTotal   atomic.Int64
+	realWorldSkipReasonM sync.Mutex
+	realWorldSkipReasons = map[string]int{}
+)
+
+type realWorldCapabilityResult struct {
+	blocked bool
+	reason  string
+}
+
+func TestMain(m *testing.M) {
+	exitCode := m.Run()
+	reportRealWorldSkipSummary()
+	os.Exit(exitCode)
+}
+
+func reportRealWorldSkipSummary() {
+	total := realWorldSkipTotal.Load()
+	if total == 0 {
+		return
+	}
+
+	realWorldSkipReasonM.Lock()
+	reasons := make([]string, 0, len(realWorldSkipReasons))
+	for reason := range realWorldSkipReasons {
+		reasons = append(reasons, reason)
+	}
+	sort.Strings(reasons)
+
+	reasonCount := make(map[string]int, len(realWorldSkipReasons))
+	for k, v := range realWorldSkipReasons {
+		reasonCount[k] = v
+	}
+	realWorldSkipReasonM.Unlock()
+
+	fmt.Fprintf(os.Stderr, "\n[fanout] %d real-world test(s) were skipped due to environment restrictions:\n", total)
+	for _, reason := range reasons {
+		fmt.Fprintf(os.Stderr, "  - %s (occurred %dx)\n", reason, reasonCount[reason])
+	}
+	fmt.Fprintf(os.Stderr, "[fanout] Run these tests in a network that allows DNS/DoH/DoH3/DoQ to execute all real-world checks.\n")
+}
+
+func rememberRealWorldSkip(reason string) {
+	realWorldSkipTotal.Add(1)
+	realWorldSkipReasonM.Lock()
+	realWorldSkipReasons[reason]++
+	realWorldSkipReasonM.Unlock()
+}
+
+func skipIfRealWorldBlocked(t *testing.T, protocol string, err error) {
+	t.Helper()
+	if err == nil {
+		return
+	}
+
+	protocol = normalizeRealWorldProtocolName(protocol)
+
+	if blocked, reason := classifyRealWorldRestriction(err); blocked {
+		fullReason := fmt.Sprintf("%s blocked: %s", protocol, reason)
+		rememberRealWorldSkip(fullReason)
+		t.Skipf("%s: skipping because this environment blocks required traffic: %v", protocol, err)
+	}
+}
+
+func requireRealWorldCapability(t *testing.T, capability string, probe func(context.Context) error) {
+	t.Helper()
+	capability = normalizeRealWorldProtocolName(capability)
+
+	if cached, ok := realWorldCapabilityCache.Load(capability); ok {
+		res := cached.(realWorldCapabilityResult)
+		if res.blocked {
+			reason := fmt.Sprintf("%s blocked: %s", capability, res.reason)
+			rememberRealWorldSkip(reason)
+			t.Skipf("%s: skipping due to cached environment restriction: %s", capability, res.reason)
+		}
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), realWorldTimeout)
+	defer cancel()
+
+	err := probe(ctx)
+	if blocked, reason := classifyRealWorldRestriction(err); blocked {
+		res := realWorldCapabilityResult{blocked: true, reason: reason}
+		realWorldCapabilityCache.Store(capability, res)
+		reason = fmt.Sprintf("%s blocked: %s", capability, reason)
+		rememberRealWorldSkip(reason)
+		t.Skipf("%s: skipping because preflight check failed in this environment: %v", capability, err)
+	}
+
+	realWorldCapabilityCache.Store(capability, realWorldCapabilityResult{})
+}
+
+func classifyRealWorldRestriction(err error) (blocked bool, reason string) {
+	if err == nil {
+		return false, ""
+	}
+
+	// Prefer typed checks to stay stable across Go/runtime/OS error message variations.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true, reasonNetBlocked
+	}
+
+	if isTLSEnvironmentRestriction(err) {
+		return true, reasonTLSIntercept
+	}
+
+	if isNetworkEnvironmentRestriction(err) {
+		return true, reasonNetBlocked
+	}
+
+	errStr := strings.ToLower(err.Error())
+
+	// Fallback for edge cases where underlying typed errors are not exposed.
+	if strings.Contains(errStr, "no recent network activity") ||
+		strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "context deadline exceeded") ||
+		strings.Contains(errStr, "eof") ||
+		strings.Contains(errStr, "remote error: tls") ||
+		strings.Contains(errStr, "tls: handshake failure") ||
+		strings.Contains(errStr, "handshake failure") {
+		return true, reasonNetBlocked
+	}
+
+	return false, ""
+}
+
+func isTLSEnvironmentRestriction(err error) bool {
+	var unknownAuthorityErr x509.UnknownAuthorityError
+	if errors.As(err, &unknownAuthorityErr) {
+		return true
+	}
+
+	var hostnameErr x509.HostnameError
+	if errors.As(err, &hostnameErr) {
+		return true
+	}
+
+	var certInvalidErr x509.CertificateInvalidError
+	if errors.As(err, &certInvalidErr) {
+		return true
+	}
+
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "failed to verify certificate") ||
+		strings.Contains(errStr, "x509: certificate is valid for") ||
+		strings.Contains(errStr, "certificate signed by unknown authority") ||
+		strings.Contains(errStr, "certificate is not valid for")
+}
+
+func isNetworkEnvironmentRestriction(err error) bool {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
+	if errors.Is(err, io.EOF) {
+		return true
+	}
+
+	// Handle common cross-platform socket failures.
+	if errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ENETUNREACH) ||
+		errors.Is(err, syscall.EHOSTUNREACH) ||
+		errors.Is(err, syscall.EPERM) ||
+		errors.Is(err, syscall.EACCES) {
+		return true
+	}
+
+	return false
+}
+
+func normalizeRealWorldProtocolName(name string) string {
+	if idx := strings.Index(name, " ("); idx > 0 {
+		return name[:idx]
+	}
+	return name
+}
+
+func newRealWorldRequest(qType uint16) *request.Request {
+	msg := new(dns.Msg)
+	msg.SetQuestion(cfTestFQDN, qType)
+	msg.RecursionDesired = true
+	return &request.Request{W: &test.ResponseWriter{}, Req: msg}
+}
 
 // requireRealWorldResponse validates that the DNS response is non-nil, has no error,
 // and contains at least one answer record.
 func requireRealWorldResponse(t *testing.T, resp *dns.Msg, err error, protocol string) {
 	t.Helper()
+	skipIfRealWorldBlocked(t, protocol, err)
 	require.NoError(t, err, "%s: request failed", protocol)
 	require.NotNil(t, resp, "%s: nil response", protocol)
 	require.Equal(t, dns.RcodeSuccess, resp.Rcode, "%s: unexpected rcode %s", protocol, dns.RcodeToString[resp.Rcode])
@@ -86,15 +288,15 @@ func TestRealWorldCloudflareUDP(t *testing.T) {
 	}
 
 	c := NewClient(cfPlain, UDP)
-
-	req := new(dns.Msg)
-	req.SetQuestion(cfTestFQDN, dns.TypeA)
-	req.RecursionDesired = true
+	requireRealWorldCapability(t, "UDP", func(ctx context.Context) error {
+		_, err := c.Request(ctx, newRealWorldRequest(dns.TypeA))
+		return err
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), realWorldTimeout)
 	defer cancel()
 
-	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
+	resp, err := c.Request(ctx, newRealWorldRequest(dns.TypeA))
 	requireRealWorldResponse(t, resp, err, "UDP")
 
 	t.Logf("UDP response: %d answer(s), first: %s", len(resp.Answer), resp.Answer[0].String())
@@ -107,15 +309,15 @@ func TestRealWorldCloudflareTCP(t *testing.T) {
 	}
 
 	c := NewClient(cfPlain, TCP)
-
-	req := new(dns.Msg)
-	req.SetQuestion(cfTestFQDN, dns.TypeA)
-	req.RecursionDesired = true
+	requireRealWorldCapability(t, "TCP", func(ctx context.Context) error {
+		_, err := c.Request(ctx, newRealWorldRequest(dns.TypeA))
+		return err
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), realWorldTimeout)
 	defer cancel()
 
-	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
+	resp, err := c.Request(ctx, newRealWorldRequest(dns.TypeA))
 	requireRealWorldResponse(t, resp, err, "TCP")
 
 	t.Logf("TCP response: %d answer(s), first: %s", len(resp.Answer), resp.Answer[0].String())
@@ -132,15 +334,15 @@ func TestRealWorldCloudflareDoT(t *testing.T) {
 		ServerName: cfDoTName,
 		MinVersion: tls.VersionTLS12,
 	})
-
-	req := new(dns.Msg)
-	req.SetQuestion(cfTestFQDN, dns.TypeA)
-	req.RecursionDesired = true
+	requireRealWorldCapability(t, "DoT", func(ctx context.Context) error {
+		_, err := c.Request(ctx, newRealWorldRequest(dns.TypeA))
+		return err
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), realWorldTimeout)
 	defer cancel()
 
-	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
+	resp, err := c.Request(ctx, newRealWorldRequest(dns.TypeA))
 	requireRealWorldResponse(t, resp, err, "DoT")
 
 	t.Logf("DoT response: %d answer(s), first: %s", len(resp.Answer), resp.Answer[0].String())
@@ -153,15 +355,15 @@ func TestRealWorldCloudflareDoH(t *testing.T) {
 	}
 
 	c := NewDoHClient(cfDoHURL)
-
-	req := new(dns.Msg)
-	req.SetQuestion(cfTestFQDN, dns.TypeA)
-	req.RecursionDesired = true
+	requireRealWorldCapability(t, "DoH", func(ctx context.Context) error {
+		_, err := c.Request(ctx, newRealWorldRequest(dns.TypeA))
+		return err
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), realWorldTimeout)
 	defer cancel()
 
-	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
+	resp, err := c.Request(ctx, newRealWorldRequest(dns.TypeA))
 	requireRealWorldResponse(t, resp, err, "DoH")
 
 	t.Logf("DoH response: %d answer(s), first: %s", len(resp.Answer), resp.Answer[0].String())
@@ -180,14 +382,15 @@ func TestRealWorldCloudflareDoH3(t *testing.T) {
 		}
 	}()
 
-	req := new(dns.Msg)
-	req.SetQuestion(cfTestFQDN, dns.TypeA)
-	req.RecursionDesired = true
+	requireRealWorldCapability(t, "DoH3", func(ctx context.Context) error {
+		_, err := c.Request(ctx, newRealWorldRequest(dns.TypeA))
+		return err
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), realWorldTimeout)
 	defer cancel()
 
-	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
+	resp, err := c.Request(ctx, newRealWorldRequest(dns.TypeA))
 	requireRealWorldResponse(t, resp, err, "DoH3")
 
 	t.Logf("DoH3 response: %d answer(s), first: %s", len(resp.Answer), resp.Answer[0].String())
@@ -207,14 +410,15 @@ func TestRealWorldAdGuardDoQ(t *testing.T) {
 		}
 	}()
 
-	req := new(dns.Msg)
-	req.SetQuestion(cfTestFQDN, dns.TypeA)
-	req.RecursionDesired = true
+	requireRealWorldCapability(t, "DoQ", func(ctx context.Context) error {
+		_, err := c.Request(ctx, newRealWorldRequest(dns.TypeA))
+		return err
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), realWorldTimeout)
 	defer cancel()
 
-	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
+	resp, err := c.Request(ctx, newRealWorldRequest(dns.TypeA))
 	skipOnTimeout(t, err, "DoQ")
 	requireRealWorldResponse(t, resp, err, "DoQ")
 
@@ -270,15 +474,15 @@ func TestRealWorldCloudflareAllProtocols(t *testing.T) { //nolint:gocyclo,funlen
 		p := p
 		t.Run(p.name, func(t *testing.T) {
 			defer p.close()
-
-			req := new(dns.Msg)
-			req.SetQuestion(cfTestFQDN, dns.TypeA)
-			req.RecursionDesired = true
+			requireRealWorldCapability(t, p.name, func(ctx context.Context) error {
+				_, err := p.client.Request(ctx, newRealWorldRequest(dns.TypeA))
+				return err
+			})
 
 			ctx, cancel := context.WithTimeout(context.Background(), realWorldTimeout)
 			defer cancel()
 
-			resp, err := p.client.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
+			resp, err := p.client.Request(ctx, newRealWorldRequest(dns.TypeA))
 			skipOnTimeout(t, err, p.name)
 			requireRealWorldResponse(t, resp, err, p.name)
 
@@ -371,15 +575,15 @@ func TestRealWorldCloudflareAllProtocolsAAAA(t *testing.T) {
 		p := p
 		t.Run(p.name, func(t *testing.T) {
 			defer p.close()
-
-			req := new(dns.Msg)
-			req.SetQuestion(cfTestFQDN, dns.TypeAAAA)
-			req.RecursionDesired = true
+			requireRealWorldCapability(t, p.name, func(ctx context.Context) error {
+				_, err := p.client.Request(ctx, newRealWorldRequest(dns.TypeAAAA))
+				return err
+			})
 
 			ctx, cancel := context.WithTimeout(context.Background(), realWorldTimeout)
 			defer cancel()
 
-			resp, err := p.client.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
+			resp, err := p.client.Request(ctx, newRealWorldRequest(dns.TypeAAAA))
 			skipOnTimeout(t, err, p.name)
 			requireRealWorldResponse(t, resp, err, p.name)
 
