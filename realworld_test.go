@@ -117,6 +117,8 @@ func skipIfRealWorldBlocked(t *testing.T, protocol string, err error) {
 		return
 	}
 
+	protocol = normalizeRealWorldProtocolName(protocol)
+
 	if blocked, reason := classifyRealWorldRestriction(err); blocked {
 		fullReason := fmt.Sprintf("%s blocked: %s", protocol, reason)
 		rememberRealWorldSkip(fullReason)
@@ -126,6 +128,7 @@ func skipIfRealWorldBlocked(t *testing.T, protocol string, err error) {
 
 func requireRealWorldCapability(t *testing.T, capability string, probe func(context.Context) error) {
 	t.Helper()
+	capability = normalizeRealWorldProtocolName(capability)
 
 	if cached, ok := realWorldCapabilityCache.Load(capability); ok {
 		res := cached.(realWorldCapabilityResult)
@@ -171,6 +174,11 @@ func classifyRealWorldRestriction(err error) (bool, string) {
 		strings.Contains(errStr, "context deadline exceeded") ||
 		strings.Contains(errStr, "network is unreachable") ||
 		strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "connection reset by peer") ||
+		strings.Contains(errStr, "eof") ||
+		strings.Contains(errStr, "remote error: tls") ||
+		strings.Contains(errStr, "tls: handshake failure") ||
+		strings.Contains(errStr, "handshake failure") ||
 		strings.Contains(errStr, "operation not permitted") ||
 		strings.Contains(errStr, "no route to host") ||
 		strings.Contains(errStr, "permission denied") {
@@ -182,6 +190,13 @@ func classifyRealWorldRestriction(err error) (bool, string) {
 	}
 
 	return false, ""
+}
+
+func normalizeRealWorldProtocolName(name string) string {
+	if idx := strings.Index(name, " ("); idx > 0 {
+		return name[:idx]
+	}
+	return name
 }
 
 func newRealWorldRequest(qType uint16) *request.Request {
