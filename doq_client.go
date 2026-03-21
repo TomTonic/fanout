@@ -117,10 +117,12 @@ func (c *doqClient) Request(ctx context.Context, r *request.Request) (*dns.Msg, 
 	ctx, finish := withRequestSpan(ctx, c.addr)
 	defer finish()
 	start := time.Now()
+	RequestCount.WithLabelValues(c.addr).Add(1)
 
 	conn, err := c.getOrDialConn(ctx)
 	if err != nil {
-		return nil, errors.Wrap(err, "DoQ: failed to establish QUIC connection")
+		ErrorCount.WithLabelValues("failed to establish QUIC connection", c.addr).Add(1)
+		return nil, errors.Wrap(err, "failed to establish QUIC connection")
 	}
 
 	// RFC 9250 §4.2: Each DNS query-response pair uses a single QUIC stream.
@@ -130,16 +132,19 @@ func (c *doqClient) Request(ctx context.Context, r *request.Request) (*dns.Msg, 
 		c.resetConn()
 		conn, err = c.getOrDialConn(ctx)
 		if err != nil {
-			return nil, errors.Wrap(err, "DoQ: failed to re-establish QUIC connection")
+			ErrorCount.WithLabelValues("failed to re-establish QUIC connection", c.addr).Add(1)
+			return nil, errors.Wrap(err, "failed to re-establish QUIC connection")
 		}
 		stream, err = conn.OpenStreamSync(ctx)
 		if err != nil {
-			return nil, errors.Wrap(err, "DoQ: failed to open QUIC stream")
+			ErrorCount.WithLabelValues("failed to open QUIC stream", c.addr).Add(1)
+			return nil, errors.Wrap(err, "failed to open QUIC stream")
 		}
 	}
 
 	ret, err := c.exchangeOnStream(ctx, stream, r.Req)
 	if err != nil {
+		ErrorCount.WithLabelValues(err.Error(), c.addr).Add(1)
 		return nil, err
 	}
 
@@ -147,7 +152,6 @@ func (c *doqClient) Request(ctx context.Context, r *request.Request) (*dns.Msg, 
 	if !ok {
 		rc = fmt.Sprint(ret.Rcode)
 	}
-	RequestCount.WithLabelValues(c.addr).Add(1)
 	RcodeCount.WithLabelValues(rc, c.addr).Add(1)
 	RequestDuration.WithLabelValues(c.addr).Observe(time.Since(start).Seconds())
 

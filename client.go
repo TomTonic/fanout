@@ -87,8 +87,11 @@ func (c *client) Request(ctx context.Context, r *request.Request) (*dns.Msg, err
 	ctx, finish := withRequestSpan(ctx, c.addr)
 	defer finish()
 	start := time.Now()
+	RequestCount.WithLabelValues(c.addr).Add(1)
+
 	conn, err := c.transport.Dial(ctx, c.net)
 	if err != nil {
+		ErrorCount.WithLabelValues(err.Error(), c.addr).Add(1)
 		return nil, err
 	}
 
@@ -119,6 +122,7 @@ func (c *client) Request(ctx context.Context, r *request.Request) (*dns.Msg, err
 
 	ret, err := c.exchangeMsg(conn, r)
 	if err != nil {
+		ErrorCount.WithLabelValues(err.Error(), c.addr).Add(1)
 		return nil, err
 	}
 
@@ -126,7 +130,6 @@ func (c *client) Request(ctx context.Context, r *request.Request) (*dns.Msg, err
 	if !ok {
 		rc = fmt.Sprint(ret.Rcode)
 	}
-	RequestCount.WithLabelValues(c.addr).Add(1)
 	RcodeCount.WithLabelValues(rc, c.addr).Add(1)
 	RequestDuration.WithLabelValues(c.addr).Observe(time.Since(start).Seconds())
 	return ret, nil
