@@ -20,7 +20,6 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"math"
 	"sync"
@@ -117,10 +116,12 @@ func (c *doqClient) Request(ctx context.Context, r *request.Request) (*dns.Msg, 
 	ctx, finish := withRequestSpan(ctx, c.addr)
 	defer finish()
 	start := time.Now()
+	observeRequestAttempt(c.addr)
 
 	conn, err := c.getOrDialConn(ctx)
 	if err != nil {
-		return nil, errors.Wrap(err, "DoQ: failed to establish QUIC connection")
+		observeRequestError(c.addr, requestErrorConnect)
+		return nil, errors.Wrap(err, "failed to establish QUIC connection")
 	}
 
 	// RFC 9250 §4.2: Each DNS query-response pair uses a single QUIC stream.
@@ -130,26 +131,23 @@ func (c *doqClient) Request(ctx context.Context, r *request.Request) (*dns.Msg, 
 		c.resetConn()
 		conn, err = c.getOrDialConn(ctx)
 		if err != nil {
-			return nil, errors.Wrap(err, "DoQ: failed to re-establish QUIC connection")
+			observeRequestError(c.addr, requestErrorReconnect)
+			return nil, errors.Wrap(err, "failed to re-establish QUIC connection")
 		}
 		stream, err = conn.OpenStreamSync(ctx)
 		if err != nil {
-			return nil, errors.Wrap(err, "DoQ: failed to open QUIC stream")
+			observeRequestError(c.addr, requestErrorStreamOpen)
+			return nil, errors.Wrap(err, "failed to open QUIC stream")
 		}
 	}
 
 	ret, err := c.exchangeOnStream(ctx, stream, r.Req)
 	if err != nil {
+		observeRequestError(c.addr, requestErrorClassOf(err, requestErrorProtocol))
 		return nil, err
 	}
 
-	rc, ok := dns.RcodeToString[ret.Rcode]
-	if !ok {
-		rc = fmt.Sprint(ret.Rcode)
-	}
-	RequestCount.WithLabelValues(c.addr).Add(1)
-	RcodeCount.WithLabelValues(rc, c.addr).Add(1)
-	RequestDuration.WithLabelValues(c.addr).Observe(time.Since(start).Seconds())
+	observeRequestResponse(c.addr, start, ret)
 
 	return ret, nil
 }
@@ -172,17 +170,17 @@ func (c *doqClient) writeQuery(ctx context.Context, stream *quic.Stream, req *dn
 	// Set write deadline from context or fallback.
 	writeDeadline := deadlineFromCtx(ctx, dialTimeout)
 	if err := stream.SetWriteDeadline(writeDeadline); err != nil {
-		return errors.Wrap(err, "DoQ: failed to set write deadline")
+		return withRequestErrorClass(errors.Wrap(err, "DoQ: failed to set write deadline"), requestErrorRequestSend)
 	}
 
 	// RFC 9250 §4.2: DNS messages are prefixed with a 2-byte length field.
 	packed, err := req.Pack()
 	if err != nil {
-		return errors.Wrap(err, "DoQ: failed to pack DNS request")
+		return withRequestErrorClass(errors.Wrap(err, "DoQ: failed to pack DNS request"), requestErrorRequestEncode)
 	}
 
 	if len(packed) > math.MaxUint16 {
-		return errors.Errorf("DoQ: packed DNS message too large (%d bytes)", len(packed))
+		return withRequestErrorClass(errors.Errorf("DoQ: packed DNS message too large (%d bytes)", len(packed)), requestErrorRequestEncode)
 	}
 
 	// Write length prefix + message in one write for efficiency.
@@ -191,12 +189,12 @@ func (c *doqClient) writeQuery(ctx context.Context, stream *quic.Stream, req *dn
 	copy(buf[2:], packed)
 
 	if _, err = stream.Write(buf); err != nil {
-		return errors.Wrap(err, "DoQ: failed to write DNS query to stream")
+		return withRequestErrorClass(errors.Wrap(err, "DoQ: failed to write DNS query to stream"), requestErrorRequestSend)
 	}
 
 	// RFC 9250 §4.2: The client MUST send a FIN after sending a query.
 	if err = stream.Close(); err != nil {
-		return errors.Wrap(err, "DoQ: failed to close write half of stream")
+		return withRequestErrorClass(errors.Wrap(err, "DoQ: failed to close write half of stream"), requestErrorRequestSend)
 	}
 
 	return nil
@@ -207,28 +205,28 @@ func (c *doqClient) readResponse(ctx context.Context, stream *quic.Stream, origI
 	// Set read deadline.
 	readDeadline := deadlineFromCtx(ctx, readTimeout)
 	if err := stream.SetReadDeadline(readDeadline); err != nil {
-		return nil, errors.Wrap(err, "DoQ: failed to set read deadline")
+		return nil, withRequestErrorClass(errors.Wrap(err, "DoQ: failed to set read deadline"), requestErrorResponseRead)
 	}
 
 	// Read the 2-byte length prefix.
 	var lenBuf [2]byte
 	if _, err := io.ReadFull(stream, lenBuf[:]); err != nil {
-		return nil, errors.Wrap(err, "DoQ: failed to read response length prefix")
+		return nil, withRequestErrorClass(errors.Wrap(err, "DoQ: failed to read response length prefix"), requestErrorResponseRead)
 	}
 	respLen := binary.BigEndian.Uint16(lenBuf[:])
 	if respLen == 0 {
-		return nil, errors.Errorf("DoQ: invalid response length %d", respLen)
+		return nil, withRequestErrorClass(errors.Errorf("DoQ: invalid response length %d", respLen), requestErrorProtocol)
 	}
 
 	// Read the DNS response message.
 	respBuf := make([]byte, respLen)
 	if _, err := io.ReadFull(stream, respBuf); err != nil {
-		return nil, errors.Wrap(err, "DoQ: failed to read DNS response")
+		return nil, withRequestErrorClass(errors.Wrap(err, "DoQ: failed to read DNS response"), requestErrorResponseRead)
 	}
 
 	ret := new(dns.Msg)
 	if err := ret.Unpack(respBuf); err != nil {
-		return nil, errors.Wrap(err, "DoQ: failed to unpack DNS response")
+		return nil, withRequestErrorClass(errors.Wrap(err, "DoQ: failed to unpack DNS response"), requestErrorResponseDecode)
 	}
 
 	// RFC 9250 §4.2: The ID MUST be set to 0 in DoQ (set to 0 by server).
