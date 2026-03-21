@@ -20,7 +20,6 @@ package fanout
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"math"
 	"sync/atomic"
 	"time"
@@ -87,11 +86,11 @@ func (c *client) Request(ctx context.Context, r *request.Request) (*dns.Msg, err
 	ctx, finish := withRequestSpan(ctx, c.addr)
 	defer finish()
 	start := time.Now()
-	RequestCount.WithLabelValues(c.addr).Add(1)
+	observeRequestAttempt(c.addr)
 
 	conn, err := c.transport.Dial(ctx, c.net)
 	if err != nil {
-		ErrorCount.WithLabelValues(err.Error(), c.addr).Add(1)
+		observeRequestError(c.addr, requestErrorConnect)
 		return nil, err
 	}
 
@@ -122,16 +121,11 @@ func (c *client) Request(ctx context.Context, r *request.Request) (*dns.Msg, err
 
 	ret, err := c.exchangeMsg(conn, r)
 	if err != nil {
-		ErrorCount.WithLabelValues(err.Error(), c.addr).Add(1)
+		observeRequestError(c.addr, requestErrorClassOf(err, requestErrorProtocol))
 		return nil, err
 	}
 
-	rc, ok := dns.RcodeToString[ret.Rcode]
-	if !ok {
-		rc = fmt.Sprint(ret.Rcode)
-	}
-	RcodeCount.WithLabelValues(rc, c.addr).Add(1)
-	RequestDuration.WithLabelValues(c.addr).Observe(time.Since(start).Seconds())
+	observeRequestResponse(c.addr, start, ret)
 	return ret, nil
 }
 
@@ -149,24 +143,24 @@ func clampUDPSize(size int) uint16 {
 // exchangeMsg writes the DNS query and reads responses until a matching ID is found.
 func (c *client) exchangeMsg(conn *dns.Conn, r *request.Request) (*dns.Msg, error) {
 	if err := conn.SetWriteDeadline(time.Now().Add(dialTimeout)); err != nil {
-		return nil, err
+		return nil, withRequestErrorClass(err, requestErrorRequestSend)
 	}
 	if err := conn.WriteMsg(r.Req); err != nil {
-		return nil, err
+		return nil, withRequestErrorClass(err, requestErrorRequestSend)
 	}
 	if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
-		return nil, err
+		return nil, withRequestErrorClass(err, requestErrorResponseRead)
 	}
 	for range maxReadLoopIterations {
 		ret, err := conn.ReadMsg()
 		if err != nil {
-			return nil, err
+			return nil, withRequestErrorClass(err, requestErrorResponseRead)
 		}
 		if r.Req.Id == ret.Id {
 			return ret, nil
 		}
 	}
-	return nil, errMaxReadLoopExceeded
+	return nil, withRequestErrorClass(errMaxReadLoopExceeded, requestErrorProtocol)
 }
 
 func withRequestSpan(ctx context.Context, addr string) (context.Context, func()) {
