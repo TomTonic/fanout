@@ -94,12 +94,14 @@ fanout FROM TO... {
 
 If monitoring is enabled (via the *prometheus* plugin) then the following metrics are exported:
 
-* `coredns_fanout_request_duration_seconds{to}` — duration per upstream interaction.
-* `coredns_fanout_request_count_total{to}` — query count per upstream.
-* `coredns_fanout_response_rcode_count_total{to, rcode}` — count of RCODEs per upstream.
+* `coredns_fanout_request_count_total{to}` — request attempt count per upstream, including attempts that fail before a DNS response is received.
+* `coredns_fanout_request_error_count_total{to, error}` — failed request attempt count per upstream and error class.
+* `coredns_fanout_response_rcode_count_total{to, rcode}` — count of RCODEs per upstream (i.e., successf).
+* `coredns_fanout_request_duration_seconds{to}` — duration of request attempts that completed with a valid DNS response.
 
 Where `to` is one of the upstream servers (**TO** from the config), `rcode` is the returned RCODE
-from the upstream.
+from the upstream, and `error` is one of the bounded classes used by fanout
+(for example `connect_failed`, `request_send_failed`, `response_read_failed`, or `response_decode_failed`).
 
 ## Examples
 

@@ -20,7 +20,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -150,22 +149,36 @@ func dohRoundTrip(ctx context.Context, httpClient *http.Client, endpoint string,
 	ctx, finish := withRequestSpan(ctx, endpoint)
 	defer finish()
 	start := time.Now()
+	observeRequestAttempt(endpoint)
 
 	msg, err := r.Req.Pack()
 	if err != nil {
+		observeRequestError(endpoint, requestErrorRequestEncode)
 		return nil, errors.Wrap(err, "failed to pack DNS request for DoH")
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(msg))
 	if err != nil {
+		observeRequestError(endpoint, requestErrorRequestBuild)
 		return nil, errors.Wrap(err, "failed to create DoH HTTP request")
 	}
 	httpReq.Header.Set("Content-Type", dohContentType)
 	httpReq.Header.Set("Accept", dohContentType)
 
+	ret, err := dohDo(httpClient, httpReq)
+	if err != nil {
+		observeRequestError(endpoint, requestErrorClassOf(err, requestErrorProtocol))
+		return nil, err
+	}
+
+	observeRequestResponse(endpoint, start, ret)
+	return ret, nil
+}
+
+func dohDo(httpClient *http.Client, httpReq *http.Request) (*dns.Msg, error) {
 	resp, err := httpClient.Do(httpReq) //nolint:gosec // G704: URL comes from plugin configuration, not user input
 	if err != nil {
-		return nil, errors.Wrap(err, "DoH HTTP request failed")
+		return nil, withRequestErrorClass(errors.Wrap(err, "DoH HTTP request failed"), requestErrorRequestSend)
 	}
 	defer func() {
 		// Drain any remaining body bytes so the connection can be reused.
@@ -174,30 +187,22 @@ func dohRoundTrip(ctx context.Context, httpClient *http.Client, endpoint string,
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, errors.Errorf("DoH server returned HTTP %d", resp.StatusCode)
+		return nil, withRequestErrorClass(errors.Errorf("DoH server returned HTTP %d", resp.StatusCode), requestErrorResponseStatus)
 	}
 
 	if ct := resp.Header.Get("Content-Type"); ct != dohContentType {
-		return nil, errors.Errorf("DoH server returned unexpected content-type %q", ct)
+		return nil, withRequestErrorClass(errors.Errorf("DoH server returned unexpected content-type %q", ct), requestErrorResponseContentType)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, dohMaxResponseSize))
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to read DoH response body")
+		return nil, withRequestErrorClass(errors.Wrap(err, "failed to read DoH response body"), requestErrorResponseRead)
 	}
 
 	ret := new(dns.Msg)
 	if err = ret.Unpack(body); err != nil {
-		return nil, errors.Wrap(err, "failed to unpack DoH DNS response")
+		return nil, withRequestErrorClass(errors.Wrap(err, "failed to unpack DoH DNS response"), requestErrorResponseDecode)
 	}
-
-	rc, ok := dns.RcodeToString[ret.Rcode]
-	if !ok {
-		rc = fmt.Sprint(ret.Rcode)
-	}
-	RequestCount.WithLabelValues(endpoint).Add(1)
-	RcodeCount.WithLabelValues(rc, endpoint).Add(1)
-	RequestDuration.WithLabelValues(endpoint).Observe(time.Since(start).Seconds())
 
 	return ret, nil
 }
