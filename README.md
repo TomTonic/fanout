@@ -2,6 +2,7 @@
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/TomTonic/fanout)](https://goreportcard.com/report/github.com/TomTonic/fanout)
 ![CI](https://github.com/TomTonic/fanout/workflows/ci/badge.svg)
+[![Vulnerabilities](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/TomTonic/b4af9f82c5cc14dd9ef02f3e86f26d32/raw/grype_me-plugin_release.json)](https://gist.github.com/TomTonic/b4af9f82c5cc14dd9ef02f3e86f26d32#grype_me-plugin_release-md)
 
 ## About This Fork
 
