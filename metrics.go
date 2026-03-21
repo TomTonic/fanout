@@ -28,19 +28,25 @@ var (
 		Namespace: plugin.Namespace,
 		Subsystem: "fanout",
 		Name:      "request_count_total",
-		Help:      "Counter of requests made per upstream.",
+		Help:      "Number of requests sent per upstream.",
 	}, []string{"to"})
+	ErrorCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: plugin.Namespace,
+		Subsystem: "fanout",
+		Name:      "response_error_count_total",
+		Help:      "Number of errors per upstream.",
+	}, []string{"error", "to"})
 	RcodeCount = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: plugin.Namespace,
 		Subsystem: "fanout",
 		Name:      "response_rcode_count_total",
-		Help:      "Counter of requests made per upstream.",
+		Help:      "Number of responses per response code per upstream.",
 	}, []string{"rcode", "to"})
 	RequestDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: plugin.Namespace,
 		Subsystem: "fanout",
 		Name:      "request_duration_seconds",
 		Buckets:   plugin.TimeBuckets,
-		Help:      "Histogram of the time each request took.",
+		Help:      "Histogram of the time requests with a valid DNS response took.",
 	}, []string{"to"})
 )
