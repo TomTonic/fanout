@@ -185,7 +185,7 @@ func (f *Fanout) getFanoutResult(ctx context.Context, responseCh <-chan *respons
 				break
 			}
 			if f.Race {
-				if !f.RaceContinueOnErrorResponse || r.response.Rcode == dns.RcodeSuccess {
+				if !f.RaceContinueOnErrorResponse || isNonErroneousRcode(r.response.Rcode) {
 					return r
 				}
 			}
@@ -195,6 +195,10 @@ func (f *Fanout) getFanoutResult(ctx context.Context, responseCh <-chan *respons
 			return r
 		}
 	}
+}
+
+func isNonErroneousRcode(rcode int) bool {
+	return rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError
 }
 
 func (f *Fanout) match(state *request.Request) bool {
