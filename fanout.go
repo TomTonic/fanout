@@ -215,7 +215,7 @@ func (f *Fanout) processClient(ctx context.Context, c Client, r *request.Request
 	<-delayTimer.C
 	for j := 0; j < f.Attempts || f.Attempts == 0; {
 		if ctx.Err() != nil {
-			return &response{client: c, response: nil, start: start, err: ctx.Err()}
+			return &response{client: c, response: nil, start: start, err: errors.Wrapf(ctx.Err(), "upstream %s", c.Endpoint())}
 		}
 		var msg *dns.Msg
 		msg, err = c.Request(ctx, r)
@@ -229,19 +229,23 @@ func (f *Fanout) processClient(ctx context.Context, c Client, r *request.Request
 		delayTimer.Reset(attemptDelay)
 		select {
 		case <-ctx.Done():
-			return &response{client: c, response: nil, start: start, err: ctx.Err()}
+			return &response{client: c, response: nil, start: start, err: errors.Wrapf(ctx.Err(), "upstream %s", c.Endpoint())}
 		case <-delayTimer.C:
 		}
 	}
-	return &response{client: c, response: nil, start: start, err: errors.Wrapf(err, "attempt limit has been reached")}
+	return &response{client: c, response: nil, start: start, err: errors.Wrapf(err, "upstream %s: attempt limit has been reached", c.Endpoint())}
 }
 
 func (f *Fanout) logIntermediateFailure(ctx context.Context, c Client, r *request.Request, attempt int, err error) {
 	if !f.Debug || err == nil || shouldSuppressRequestFailure(ctx, err) {
 		return
 	}
+	ctxInfo := ""
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		ctxInfo = fmt.Sprintf(" context_error=%v", ctxErr)
+	}
 	log.Warningf(
-		"upstream failure: upstream=%s network=%s attempt=%s qname=%s qtype=%d error_class=%s error=%v",
+		"upstream failure: upstream=%s network=%s attempt=%s qname=%s qtype=%d error_class=%s error=%v%s",
 		c.Endpoint(),
 		c.Net(),
 		f.attemptLabel(attempt),
@@ -249,15 +253,8 @@ func (f *Fanout) logIntermediateFailure(ctx context.Context, c Client, r *reques
 		r.QType(),
 		requestErrorClassOf(err),
 		err,
+		ctxInfo,
 	)
-	if ctx.Err() != nil {
-		log.Warningf(
-			"request context after upstream failure: upstream=%s error_class=%s context_error=%v",
-			c.Endpoint(),
-			requestErrorClassOf(err),
-			ctx.Err(),
-		)
-	}
 }
 
 func (f *Fanout) attemptLabel(attempt int) string {
