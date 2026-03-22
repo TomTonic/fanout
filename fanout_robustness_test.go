@@ -236,6 +236,81 @@ func TestLogIntermediateFailure_SuppressesCancelledTransportNoise(t *testing.T) 
 	require.Empty(t, buf.String())
 }
 
+// TestLogIntermediateFailure_DeadlineExceededIncludesContextError verifies that when a
+// request times out (context.DeadlineExceeded), the log line includes the context_error
+// field in a single line so the user can distinguish timeouts from genuine network errors.
+func TestLogIntermediateFailure_DeadlineExceededIncludesContextError(t *testing.T) {
+	var buf bytes.Buffer
+	oldWriter := stdlog.Writer()
+	oldFlags := stdlog.Flags()
+	oldPrefix := stdlog.Prefix()
+	stdlog.SetOutput(&buf)
+	stdlog.SetFlags(0)
+	stdlog.SetPrefix("")
+	defer func() {
+		stdlog.SetOutput(oldWriter)
+		stdlog.SetFlags(oldFlags)
+		stdlog.SetPrefix(oldPrefix)
+	}()
+
+	f := New()
+	f.Debug = true
+
+	ctx, cancel := context.WithTimeout(context.Background(), 0)
+	defer cancel()
+	<-ctx.Done()
+
+	req := new(dns.Msg)
+	req.SetQuestion(testQuery, dns.TypeA)
+	state := &request.Request{W: &test.ResponseWriter{}, Req: req}
+	err := withRequestErrorClass(errors.New("read tcp 127.0.0.1:1->1.1.1.1:53: i/o timeout"), requestErrorResponseRead)
+
+	f.logIntermediateFailure(ctx, loggingClientStub{endpoint: "1.1.1.1:53", network: TCP}, state, 2, err)
+
+	output := buf.String()
+	require.Contains(t, output, "upstream failure:")
+	require.Contains(t, output, "error_class=response_read_failed")
+	require.Contains(t, output, "context_error=context deadline exceeded")
+	// Verify it's a single log line (no extra newline-separated context line)
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	require.Len(t, lines, 1, "context_error must be merged into the main log line, not a separate line")
+}
+
+// TestLogIntermediateFailure_ShowsConnectFailedClass verifies the bug fix: the debug log
+// must show error_class=connect_failed for Dial failures, matching the Prometheus counter.
+// Before the fix, error_class showed protocol_error because the returned error lacked the
+// requestMetricError wrapping.
+func TestLogIntermediateFailure_ShowsConnectFailedClass(t *testing.T) {
+	var buf bytes.Buffer
+	oldWriter := stdlog.Writer()
+	oldFlags := stdlog.Flags()
+	oldPrefix := stdlog.Prefix()
+	stdlog.SetOutput(&buf)
+	stdlog.SetFlags(0)
+	stdlog.SetPrefix("")
+	defer func() {
+		stdlog.SetOutput(oldWriter)
+		stdlog.SetFlags(oldFlags)
+		stdlog.SetPrefix(oldPrefix)
+	}()
+
+	f := New()
+	f.Debug = true
+
+	req := new(dns.Msg)
+	req.SetQuestion(testQuery, dns.TypeA)
+	state := &request.Request{W: &test.ResponseWriter{}, Req: req}
+	err := withRequestErrorClass(errors.New("dial tcp 1.1.1.1:53: connection refused"), requestErrorConnect)
+
+	f.logIntermediateFailure(context.Background(), loggingClientStub{endpoint: "1.1.1.1:53", network: UDP}, state, 1, err)
+
+	output := buf.String()
+	require.Contains(t, output, "error_class=connect_failed",
+		"debug log must show the same error class as the Prometheus counter")
+	require.NotContains(t, output, "error_class=protocol_error",
+		"protocol_error is the wrong fallback class for a Dial failure")
+}
+
 // TestServeDNS_ErrorIsWrappedForCoreDNSErrorsPlugin verifies that request-level failures are
 // returned with the standard CoreDNS plugin prefix so the errors plugin logs a clear origin.
 func TestServeDNS_ErrorIsWrappedForCoreDNSErrorsPlugin(t *testing.T) {

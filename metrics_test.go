@@ -311,6 +311,89 @@ func TestServeDNSRequestMetricsTrackWins(t *testing.T) {
 	assertRequestOutcomeInvariant(t, before, after)
 }
 
+// TestServeDNSRequestMetricsServfailCountsAsTransportSuccess verifies that a SERVFAIL
+// response from an upstream is counted as a transport-level success (a well-formed DNS
+// packet was received) and as a win (it was the selected response). This validates that
+// the user can distinguish "upstream responds but with DNS errors" from "upstream is
+// unreachable" by comparing success_count vs rcode breakdown.
+func TestServeDNSRequestMetricsServfailCountsAsTransportSuccess(t *testing.T) {
+	const endpoint = "metrics-servfail.invalid:53"
+	before := snapshotMetrics(t, endpoint, requestErrorProtocol, dns.RcodeToString[dns.RcodeServerFailure])
+
+	f := New()
+	f.From = "."
+	f.Attempts = 1
+	f.WorkerCount = 1
+	f.AddClient(metricsClientStub{
+		endpoint: endpoint,
+		network:  UDP,
+		request: func(_ context.Context, req *request.Request) (*dns.Msg, error) {
+			observeRequestAttempt(endpoint)
+			resp := new(dns.Msg)
+			resp.SetRcode(req.Req, dns.RcodeServerFailure)
+			observeRequestResponse(endpoint, time.Now(), resp)
+			return resp, nil
+		},
+	})
+
+	req := new(dns.Msg)
+	req.SetQuestion("example.org.", dns.TypeA)
+
+	rcode, err := f.ServeDNS(context.Background(), &test.ResponseWriter{}, req)
+	require.NoError(t, err)
+	require.Equal(t, 0, rcode)
+
+	after := snapshotMetrics(t, endpoint, requestErrorProtocol, dns.RcodeToString[dns.RcodeServerFailure])
+	require.Equal(t, before.attempts+1, after.attempts)
+	require.Equal(t, before.totalErrors, after.totalErrors)
+	require.Equal(t, before.cancelCount, after.cancelCount)
+	require.Equal(t, before.successCount+1, after.successCount)
+	require.Equal(t, before.winCount+1, after.winCount)
+	require.Equal(t, before.rcodeCount+1, after.rcodeCount, "SERVFAIL must increment the rcode counter")
+	require.Equal(t, before.durationCount+1, after.durationCount)
+	require.Equal(t, before.totalRcodeCount+1, after.totalRcodeCount)
+	assertRequestOutcomeInvariant(t, before, after)
+}
+
+// TestShouldSuppressRequestFailure_DeadlineExceeded verifies that context.DeadlineExceeded
+// is NOT suppressed. Deadline exceeded means the upstream was too slow and represents a
+// genuine operational signal, unlike context.Canceled which is just fanout shutting down
+// the losing race participant.
+func TestShouldSuppressRequestFailure_DeadlineExceeded(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 0)
+	defer cancel()
+	<-ctx.Done()
+
+	err := errors.New("read: i/o timeout")
+	require.False(t, shouldSuppressRequestFailure(ctx, err),
+		"DeadlineExceeded must NOT be suppressed — it is a real signal that the upstream is too slow")
+}
+
+// TestShouldSuppressRequestFailure_NilError verifies that a nil error is not suppressed.
+func TestShouldSuppressRequestFailure_NilError(t *testing.T) {
+	require.False(t, shouldSuppressRequestFailure(context.Background(), nil))
+}
+
+// TestDialFailureErrorClassMatchesPrometheus verifies the bug fix: when Dial fails, the
+// returned error must carry the requestMetricError wrapping so that logIntermediateFailure
+// shows error_class=connect_failed (matching the Prometheus counter), not protocol_error.
+func TestDialFailureErrorClassMatchesPrometheus(t *testing.T) {
+	c := &client{
+		transport: fakeTransport{
+			dialFunc: func(context.Context, string) (*dns.Conn, error) {
+				return nil, errors.New("dial tcp: connection refused")
+			},
+		},
+		addr: "error-class-test.invalid:53",
+		net:  "udp",
+	}
+
+	_, err := c.Request(context.Background(), newTestRequest())
+	require.Error(t, err)
+	require.Equal(t, requestErrorConnect, requestErrorClassOf(err),
+		"error returned by client.Request must carry connect_failed class, not protocol_error fallback")
+}
+
 func newTestRequest() *request.Request {
 	req := new(dns.Msg)
 	req.SetQuestion("example.org.", dns.TypeA)
