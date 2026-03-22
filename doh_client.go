@@ -154,13 +154,13 @@ func dohRoundTrip(ctx context.Context, httpClient *http.Client, endpoint string,
 	msg, err := r.Req.Pack()
 	if err != nil {
 		observeRequestError(endpoint, requestErrorRequestEncode)
-		return nil, errors.Wrap(err, "failed to pack DNS request for DoH")
+		return nil, withRequestErrorClass(errors.Wrap(err, "failed to pack DNS request for DoH"), requestErrorRequestEncode)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(msg))
 	if err != nil {
 		observeRequestError(endpoint, requestErrorRequestBuild)
-		return nil, errors.Wrap(err, "failed to create DoH HTTP request")
+		return nil, withRequestErrorClass(errors.Wrap(err, "failed to create DoH HTTP request"), requestErrorRequestBuild)
 	}
 	httpReq.Header.Set("Content-Type", dohContentType)
 	httpReq.Header.Set("Accept", dohContentType)

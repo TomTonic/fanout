@@ -124,7 +124,7 @@ func (c *doqClient) Request(ctx context.Context, r *request.Request) (*dns.Msg, 
 			return nil, observeSuppressedRequestFailure(ctx, c.addr, err)
 		}
 		observeRequestError(c.addr, requestErrorConnect)
-		return nil, errors.Wrap(err, "failed to establish QUIC connection")
+		return nil, withRequestErrorClass(errors.Wrap(err, "failed to establish QUIC connection"), requestErrorConnect)
 	}
 
 	// RFC 9250 §4.2: Each DNS query-response pair uses a single QUIC stream.
@@ -138,7 +138,7 @@ func (c *doqClient) Request(ctx context.Context, r *request.Request) (*dns.Msg, 
 				return nil, observeSuppressedRequestFailure(ctx, c.addr, err)
 			}
 			observeRequestError(c.addr, requestErrorReconnect)
-			return nil, errors.Wrap(err, "failed to re-establish QUIC connection")
+			return nil, withRequestErrorClass(errors.Wrap(err, "failed to re-establish QUIC connection"), requestErrorReconnect)
 		}
 		stream, err = conn.OpenStreamSync(ctx)
 		if err != nil {
@@ -146,7 +146,7 @@ func (c *doqClient) Request(ctx context.Context, r *request.Request) (*dns.Msg, 
 				return nil, observeSuppressedRequestFailure(ctx, c.addr, err)
 			}
 			observeRequestError(c.addr, requestErrorStreamOpen)
-			return nil, errors.Wrap(err, "failed to open QUIC stream")
+			return nil, withRequestErrorClass(errors.Wrap(err, "failed to open QUIC stream"), requestErrorStreamOpen)
 		}
 	}
 
