@@ -167,6 +167,9 @@ func dohRoundTrip(ctx context.Context, httpClient *http.Client, endpoint string,
 
 	ret, err := dohDo(httpClient, httpReq)
 	if err != nil {
+		if shouldSuppressRequestFailure(ctx, err) {
+			return nil, suppressedRequestFailure(ctx, err)
+		}
 		observeRequestError(endpoint, requestErrorClassOf(err, requestErrorProtocol))
 		return nil, err
 	}

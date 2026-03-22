@@ -90,6 +90,9 @@ func (c *client) Request(ctx context.Context, r *request.Request) (*dns.Msg, err
 
 	conn, err := c.transport.Dial(ctx, c.net)
 	if err != nil {
+		if shouldSuppressRequestFailure(ctx, err) {
+			return nil, suppressedRequestFailure(ctx, err)
+		}
 		observeRequestError(c.addr, requestErrorConnect)
 		return nil, err
 	}
@@ -121,6 +124,9 @@ func (c *client) Request(ctx context.Context, r *request.Request) (*dns.Msg, err
 
 	ret, err := c.exchangeMsg(conn, r)
 	if err != nil {
+		if shouldSuppressRequestFailure(ctx, err) {
+			return nil, suppressedRequestFailure(ctx, err)
+		}
 		observeRequestError(c.addr, requestErrorClassOf(err, requestErrorProtocol))
 		return nil, err
 	}
