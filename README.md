@@ -100,8 +100,8 @@ If monitoring is enabled (via the *prometheus* plugin) then the following metric
 * `coredns_fanout_request_count_total{to}` — request attempt count per upstream, including attempts that fail before a DNS response is received.
 * `coredns_fanout_request_error_count_total{to, error}` — request attempt count per upstream and bounded upstream error class.
 * `coredns_fanout_request_cancel_count_total{to}` — request attempt count per upstream that fanout canceled locally before a final upstream outcome was received.
-* `coredns_fanout_request_success_count_total{to}` — request attempt count per upstream that completed with a valid DNS response.
-* `coredns_fanout_response_win_count_total{to}` — selected upstream response count per upstream after fanout chose the response that was returned downstream.
+* `coredns_fanout_request_success_count_total{to}` — request attempt count per upstream that completed with a valid DNS response (transport-level success). This includes responses with any RCODE, e.g. `SERVFAIL` or `NXDOMAIN`, because the upstream did respond with a well-formed DNS packet.
+* `coredns_fanout_response_win_count_total{to}` — number of times an upstream's response was the one fanout selected and returned downstream. Because fanout queries multiple upstreams in parallel, several may succeed, but only one response is written to the client per incoming query. A win is counted for any selected response, including non-success RCODEs when no better response was available.
 * `coredns_fanout_response_rcode_count_total{to, rcode}` — count of returned RCODEs per upstream.
 * `coredns_fanout_request_duration_seconds{to}` — duration of request attempts that completed with a valid DNS response.
 
@@ -113,9 +113,20 @@ The counters are designed to follow a simple accounting model per upstream:
 
 * `request_count_total = request_error_count_total (summed over error labels) + request_cancel_count_total + request_success_count_total`
 * `request_success_count_total = response_rcode_count_total` summed over all `rcode` labels
-* `response_win_count_total <= request_success_count_total`
+* `response_win_count_total <= request_success_count_total` (because multiple upstreams may succeed per query but only one is selected)
 
-When `debug` logging is enabled, fanout logs only defective upstream attempts and includes the normalized `error_class` field so warning lines can be correlated directly with `request_error_count_total`.
+### Practical interpretation
+
+Use these metrics to identify the best upstream in your environment:
+
+* An upstream with a high `connect_failed` error rate and zero successes is likely blocked by a firewall or misconfigured.
+* An upstream with high success but low win rate works fine but is slower than competing upstreams.
+* An upstream with high `SERVFAIL` rcode count responds, but cannot resolve queries — check the server itself.
+* Compare win rates across upstreams to find the fastest and most reliable one.
+
+### Debug logging
+
+When `debug` logging is enabled, fanout logs only defective upstream attempts and includes the normalized `error_class` field so warning lines can be correlated directly with `request_error_count_total`. Expected local cancellations (i.e. losing race participants) are suppressed to avoid noise. When a request times out (`context deadline exceeded`), the log line includes a `context_error` field to distinguish timeouts from genuine network errors. Without `debug` enabled, final request failures are still logged at ERROR level by the CoreDNS errors plugin, including the upstream endpoint in the error message.
 
 ## Examples
 
