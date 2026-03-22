@@ -123,6 +123,7 @@ func (f *Fanout) ServeDNS(ctx context.Context, w dns.ResponseWriter, m *dns.Msg)
 		}
 		return 0, nil
 	}
+	observeRequestWin(result.client.Endpoint())
 	if err := w.WriteMsg(result.response); err != nil {
 		return dns.RcodeServerFailure, plugin.Error(f.Name(), errors.Wrap(err, "failed to write upstream response"))
 	}
@@ -246,14 +247,14 @@ func (f *Fanout) logIntermediateFailure(ctx context.Context, c Client, r *reques
 		f.attemptLabel(attempt),
 		r.QName(),
 		r.QType(),
-		requestErrorClassOf(err, requestErrorProtocol),
+		requestErrorClassOf(err),
 		err,
 	)
 	if ctx.Err() != nil {
 		log.Warningf(
 			"request context after upstream failure: upstream=%s error_class=%s context_error=%v",
 			c.Endpoint(),
-			requestErrorClassOf(err, requestErrorProtocol),
+			requestErrorClassOf(err),
 			ctx.Err(),
 		)
 	}

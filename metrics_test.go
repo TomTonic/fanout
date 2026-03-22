@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/coredns/coredns/plugin/test"
 	"github.com/coredns/coredns/request"
@@ -36,6 +37,9 @@ import (
 const (
 	requestCountMetricName    = "coredns_fanout_request_count_total"
 	requestErrorMetricName    = "coredns_fanout_request_error_count_total"
+	requestCancelMetricName   = "coredns_fanout_request_cancel_count_total"
+	requestSuccessMetricName  = "coredns_fanout_request_success_count_total"
+	responseWinMetricName     = "coredns_fanout_response_win_count_total"
 	rcodeCountMetricName      = "coredns_fanout_response_rcode_count_total"
 	requestDurationMetricName = "coredns_fanout_request_duration_seconds"
 )
@@ -76,11 +80,36 @@ func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 type metricsSnapshot struct {
-	attempts      float64
-	errorCount    float64
-	rcodeCount    float64
-	durationCount uint64
+	attempts        float64
+	totalErrors     float64
+	errorCount      float64
+	cancelCount     float64
+	successCount    float64
+	winCount        float64
+	rcodeCount      float64
+	durationCount   uint64
+	totalRcodeCount float64
 }
+
+type metricsClientStub struct {
+	endpoint string
+	network  string
+	request  func(context.Context, *request.Request) (*dns.Msg, error)
+}
+
+func (c metricsClientStub) Request(ctx context.Context, req *request.Request) (*dns.Msg, error) {
+	return c.request(ctx, req)
+}
+
+func (c metricsClientStub) Endpoint() string {
+	return c.endpoint
+}
+
+func (c metricsClientStub) Net() string {
+	return c.network
+}
+
+func (c metricsClientStub) SetTLSConfig(*tls.Config) {}
 
 // TestClientRequestMetricsOnDialFailure verifies that a failed upstream connection attempt
 // increments the request attempt counter and the bounded connect_failed counter without
@@ -105,8 +134,13 @@ func TestClientRequestMetricsOnDialFailure(t *testing.T) {
 	after := snapshotMetrics(t, endpoint, requestErrorConnect, dns.RcodeToString[dns.RcodeSuccess])
 	require.Equal(t, before.attempts+1, after.attempts)
 	require.Equal(t, before.errorCount+1, after.errorCount)
+	require.Equal(t, before.totalErrors+1, after.totalErrors)
+	require.Equal(t, before.cancelCount, after.cancelCount)
+	require.Equal(t, before.successCount, after.successCount)
+	require.Equal(t, before.winCount, after.winCount)
 	require.Equal(t, before.rcodeCount, after.rcodeCount)
 	require.Equal(t, before.durationCount, after.durationCount)
+	assertRequestOutcomeInvariant(t, before, after)
 }
 
 // TestDoHRequestMetricsOnSuccess verifies that a successful DoH request increments the
@@ -133,8 +167,14 @@ func TestDoHRequestMetricsOnSuccess(t *testing.T) {
 	after := snapshotMetrics(t, endpoint, requestErrorResponseRead, dns.RcodeToString[dns.RcodeSuccess])
 	require.Equal(t, before.attempts+1, after.attempts)
 	require.Equal(t, before.errorCount, after.errorCount)
+	require.Equal(t, before.totalErrors, after.totalErrors)
+	require.Equal(t, before.cancelCount, after.cancelCount)
+	require.Equal(t, before.successCount+1, after.successCount)
+	require.Equal(t, before.winCount, after.winCount)
 	require.Equal(t, before.rcodeCount+1, after.rcodeCount)
 	require.Equal(t, before.durationCount+1, after.durationCount)
+	require.Equal(t, before.totalRcodeCount+1, after.totalRcodeCount)
+	assertRequestOutcomeInvariant(t, before, after)
 }
 
 // TestDoHRequestMetricsOnHTTPStatusFailure verifies that a DoH HTTP error increments the
@@ -158,8 +198,13 @@ func TestDoHRequestMetricsOnHTTPStatusFailure(t *testing.T) {
 	after := snapshotMetrics(t, endpoint, requestErrorResponseStatus, dns.RcodeToString[dns.RcodeSuccess])
 	require.Equal(t, before.attempts+1, after.attempts)
 	require.Equal(t, before.errorCount+1, after.errorCount)
+	require.Equal(t, before.totalErrors+1, after.totalErrors)
+	require.Equal(t, before.cancelCount, after.cancelCount)
+	require.Equal(t, before.successCount, after.successCount)
+	require.Equal(t, before.winCount, after.winCount)
 	require.Equal(t, before.rcodeCount, after.rcodeCount)
 	require.Equal(t, before.durationCount, after.durationCount)
+	assertRequestOutcomeInvariant(t, before, after)
 
 	unexpectedLabelValue := counterValue(t, requestErrorMetricName, map[string]string{"to": endpoint, "error": "HTTP 502"})
 	require.Zero(t, unexpectedLabelValue)
@@ -185,8 +230,13 @@ func TestDoHRequestMetricsOnContentTypeFailure(t *testing.T) {
 	after := snapshotMetrics(t, endpoint, requestErrorResponseContentType, dns.RcodeToString[dns.RcodeSuccess])
 	require.Equal(t, before.attempts+1, after.attempts)
 	require.Equal(t, before.errorCount+1, after.errorCount)
+	require.Equal(t, before.totalErrors+1, after.totalErrors)
+	require.Equal(t, before.cancelCount, after.cancelCount)
+	require.Equal(t, before.successCount, after.successCount)
+	require.Equal(t, before.winCount, after.winCount)
 	require.Equal(t, before.rcodeCount, after.rcodeCount)
 	require.Equal(t, before.durationCount, after.durationCount)
+	assertRequestOutcomeInvariant(t, before, after)
 
 	unexpectedLabelValue := counterValue(t, requestErrorMetricName, map[string]string{"to": endpoint, "error": "unexpected content-type \"text/plain\""})
 	require.Zero(t, unexpectedLabelValue)
@@ -211,8 +261,54 @@ func TestDoHRequestMetricsIgnoreLocalCancellation(t *testing.T) {
 	after := snapshotMetrics(t, endpoint, requestErrorRequestSend, dns.RcodeToString[dns.RcodeSuccess])
 	require.Equal(t, before.attempts+1, after.attempts)
 	require.Equal(t, before.errorCount, after.errorCount)
+	require.Equal(t, before.totalErrors, after.totalErrors)
+	require.Equal(t, before.cancelCount+1, after.cancelCount)
+	require.Equal(t, before.successCount, after.successCount)
+	require.Equal(t, before.winCount, after.winCount)
 	require.Equal(t, before.rcodeCount, after.rcodeCount)
 	require.Equal(t, before.durationCount, after.durationCount)
+	assertRequestOutcomeInvariant(t, before, after)
+}
+
+// TestServeDNSRequestMetricsTrackWins verifies that a selected upstream response increments
+// both the successful request outcome and the downstream win counter for that upstream.
+func TestServeDNSRequestMetricsTrackWins(t *testing.T) {
+	const endpoint = "metrics-win.invalid:53"
+	before := snapshotMetrics(t, endpoint, requestErrorProtocol, dns.RcodeToString[dns.RcodeSuccess])
+
+	f := New()
+	f.From = "."
+	f.Attempts = 1
+	f.WorkerCount = 1
+	f.AddClient(metricsClientStub{
+		endpoint: endpoint,
+		network:  UDP,
+		request: func(_ context.Context, req *request.Request) (*dns.Msg, error) {
+			observeRequestAttempt(endpoint)
+			resp := new(dns.Msg)
+			resp.SetReply(req.Req)
+			observeRequestResponse(endpoint, time.Now(), resp)
+			return resp, nil
+		},
+	})
+
+	req := new(dns.Msg)
+	req.SetQuestion("example.org.", dns.TypeA)
+
+	rcode, err := f.ServeDNS(context.Background(), &test.ResponseWriter{}, req)
+	require.NoError(t, err)
+	require.Equal(t, 0, rcode)
+
+	after := snapshotMetrics(t, endpoint, requestErrorProtocol, dns.RcodeToString[dns.RcodeSuccess])
+	require.Equal(t, before.attempts+1, after.attempts)
+	require.Equal(t, before.totalErrors, after.totalErrors)
+	require.Equal(t, before.cancelCount, after.cancelCount)
+	require.Equal(t, before.successCount+1, after.successCount)
+	require.Equal(t, before.winCount+1, after.winCount)
+	require.Equal(t, before.rcodeCount+1, after.rcodeCount)
+	require.Equal(t, before.durationCount+1, after.durationCount)
+	require.Equal(t, before.totalRcodeCount+1, after.totalRcodeCount)
+	assertRequestOutcomeInvariant(t, before, after)
 }
 
 func newTestRequest() *request.Request {
@@ -234,11 +330,27 @@ func mustPackReply(t *testing.T, req *dns.Msg, rcode int) []byte {
 func snapshotMetrics(t *testing.T, endpoint string, errClass requestErrorClass, rcode string) metricsSnapshot {
 	t.Helper()
 	return metricsSnapshot{
-		attempts:      counterValue(t, requestCountMetricName, map[string]string{"to": endpoint}),
-		errorCount:    counterValue(t, requestErrorMetricName, map[string]string{"to": endpoint, "error": string(errClass)}),
-		rcodeCount:    counterValue(t, rcodeCountMetricName, map[string]string{"to": endpoint, "rcode": rcode}),
-		durationCount: histogramCount(t, requestDurationMetricName, map[string]string{"to": endpoint}),
+		attempts:        counterValue(t, requestCountMetricName, map[string]string{"to": endpoint}),
+		totalErrors:     sumCounterValues(t, requestErrorMetricName, map[string]string{"to": endpoint}),
+		errorCount:      counterValue(t, requestErrorMetricName, map[string]string{"to": endpoint, "error": string(errClass)}),
+		cancelCount:     counterValue(t, requestCancelMetricName, map[string]string{"to": endpoint}),
+		successCount:    counterValue(t, requestSuccessMetricName, map[string]string{"to": endpoint}),
+		winCount:        counterValue(t, responseWinMetricName, map[string]string{"to": endpoint}),
+		rcodeCount:      counterValue(t, rcodeCountMetricName, map[string]string{"to": endpoint, "rcode": rcode}),
+		durationCount:   histogramCount(t, requestDurationMetricName, map[string]string{"to": endpoint}),
+		totalRcodeCount: sumCounterValues(t, rcodeCountMetricName, map[string]string{"to": endpoint}),
 	}
+}
+
+func assertRequestOutcomeInvariant(t *testing.T, before, after metricsSnapshot) {
+	t.Helper()
+	attemptDelta := after.attempts - before.attempts
+	errorDelta := after.totalErrors - before.totalErrors
+	cancelDelta := after.cancelCount - before.cancelCount
+	successDelta := after.successCount - before.successCount
+	require.Equal(t, attemptDelta, errorDelta+cancelDelta+successDelta)
+	require.Equal(t, successDelta, after.totalRcodeCount-before.totalRcodeCount)
+	require.GreaterOrEqual(t, successDelta, after.winCount-before.winCount)
 }
 
 func counterValue(t *testing.T, name string, labels map[string]string) float64 {
@@ -257,6 +369,26 @@ func histogramCount(t *testing.T, name string, labels map[string]string) uint64 
 		return 0
 	}
 	return metric.GetHistogram().GetSampleCount()
+}
+
+func sumCounterValues(t *testing.T, name string, labels map[string]string) float64 {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		if family.GetName() != name {
+			continue
+		}
+		var total float64
+		for _, metric := range family.GetMetric() {
+			if !metricHasLabels(metric, labels) || metric.Counter == nil {
+				continue
+			}
+			total += metric.GetCounter().GetValue()
+		}
+		return total
+	}
+	return 0
 }
 
 func findMetric(t *testing.T, name string, labels map[string]string) *dto.Metric {
@@ -282,6 +414,22 @@ func metricLabelsMatch(metric *dto.Metric, expected map[string]string) bool {
 	}
 	for _, label := range metric.GetLabel() {
 		if expected[label.GetName()] != label.GetValue() {
+			return false
+		}
+	}
+	return true
+}
+
+func metricHasLabels(metric *dto.Metric, expected map[string]string) bool {
+	for key, value := range expected {
+		matched := false
+		for _, label := range metric.GetLabel() {
+			if label.GetName() == key && label.GetValue() == value {
+				matched = true
+				break
+			}
+		}
+		if !matched {
 			return false
 		}
 	}
