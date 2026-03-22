@@ -94,7 +94,7 @@ func (c *client) Request(ctx context.Context, r *request.Request) (*dns.Msg, err
 			return nil, observeSuppressedRequestFailure(ctx, c.addr, err)
 		}
 		observeRequestError(c.addr, requestErrorConnect)
-		return nil, err
+		return nil, withRequestErrorClass(err, requestErrorConnect)
 	}
 
 	conn.UDPSize = clampUDPSize(r.Size())
