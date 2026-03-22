@@ -282,6 +282,8 @@ func parseValue(v string, f *Fanout, c *caddyfile.Dispenser) error {
 		return parseLoadFactor(f, c)
 	case "timeout":
 		return parseTimeout(f, c)
+	case "debug":
+		return parseDebug(f, c)
 	case "race":
 		return parseRace(f, c)
 	case "race-continue-on-error-response":
@@ -297,6 +299,14 @@ func parseValue(v string, f *Fanout, c *caddyfile.Dispenser) error {
 	default:
 		return errors.Errorf("unknown property %v", v)
 	}
+}
+
+func parseDebug(f *Fanout, c *caddyfile.Dispenser) error {
+	if c.NextArg() {
+		return c.ArgErr()
+	}
+	f.Debug = true
+	return nil
 }
 
 func parsePolicy(f *Fanout, c *caddyfile.Dispenser) error {

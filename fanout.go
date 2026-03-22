@@ -21,6 +21,7 @@ package fanout
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"sync"
 	"time"
 
@@ -43,6 +44,7 @@ type Fanout struct {
 	ExcludeDomains              Domain
 	tlsServerName               string
 	Timeout                     time.Duration
+	Debug                       bool
 	Race                        bool
 	RaceContinueOnErrorResponse bool
 	net                         string
@@ -101,13 +103,13 @@ func (f *Fanout) ServeDNS(ctx context.Context, w dns.ResponseWriter, m *dns.Msg)
 	defer cancel()
 	result := f.getFanoutResult(timeoutContext, f.runWorkers(timeoutContext, &req))
 	if result == nil {
-		return dns.RcodeServerFailure, timeoutContext.Err()
+		return dns.RcodeServerFailure, plugin.Error(f.Name(), timeoutContext.Err())
 	}
 	metadata.SetValueFunc(ctx, "fanout/upstream", func() string {
 		return result.client.Endpoint()
 	})
 	if result.err != nil {
-		return dns.RcodeServerFailure, result.err
+		return dns.RcodeServerFailure, plugin.Error(f.Name(), result.err)
 	}
 	if f.TapPlugin != nil {
 		toDnstap(f.TapPlugin, result.client, &req, result.response, result.start)
@@ -116,10 +118,14 @@ func (f *Fanout) ServeDNS(ctx context.Context, w dns.ResponseWriter, m *dns.Msg)
 		debug.Hexdumpf(result.response, "Wrong reply for id: %d, %s %d", result.response.Id, req.QName(), req.QType())
 		formerr := new(dns.Msg)
 		formerr.SetRcode(req.Req, dns.RcodeFormatError)
-		logErrIfNotNil(w.WriteMsg(formerr))
+		if err := w.WriteMsg(formerr); err != nil {
+			return dns.RcodeFormatError, plugin.Error(f.Name(), errors.Wrap(err, "failed to write format error response"))
+		}
 		return 0, nil
 	}
-	logErrIfNotNil(w.WriteMsg(result.response))
+	if err := w.WriteMsg(result.response); err != nil {
+		return dns.RcodeServerFailure, plugin.Error(f.Name(), errors.Wrap(err, "failed to write upstream response"))
+	}
 	return 0, nil
 }
 
@@ -211,6 +217,7 @@ func (f *Fanout) processClient(ctx context.Context, c Client, r *request.Request
 		if err == nil {
 			return &response{client: c, response: msg, start: start, err: err}
 		}
+		f.logIntermediateFailure(ctx, c, r, j+1, err)
 		if f.Attempts != 0 {
 			j++
 		}
@@ -222,4 +229,29 @@ func (f *Fanout) processClient(ctx context.Context, c Client, r *request.Request
 		}
 	}
 	return &response{client: c, response: nil, start: start, err: errors.Wrapf(err, "attempt limit has been reached")}
+}
+
+func (f *Fanout) logIntermediateFailure(ctx context.Context, c Client, r *request.Request, attempt int, err error) {
+	if !f.Debug || err == nil || errors.Is(err, context.Canceled) {
+		return
+	}
+	log.Warningf(
+		"upstream failure: upstream=%s network=%s attempt=%s qname=%s qtype=%d error=%v",
+		c.Endpoint(),
+		c.Net(),
+		f.attemptLabel(attempt),
+		r.QName(),
+		r.QType(),
+		err,
+	)
+	if ctx.Err() != nil && !errors.Is(ctx.Err(), context.Canceled) {
+		log.Warningf("request context after upstream failure: upstream=%s context_error=%v", c.Endpoint(), ctx.Err())
+	}
+}
+
+func (f *Fanout) attemptLabel(attempt int) string {
+	if f.Attempts == 0 {
+		return fmt.Sprintf("%d/inf", attempt)
+	}
+	return fmt.Sprintf("%d/%d", attempt, f.Attempts)
 }

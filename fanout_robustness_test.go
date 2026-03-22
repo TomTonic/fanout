@@ -17,7 +17,9 @@
 package fanout
 
 import (
+	"bytes"
 	"context"
+	stdlog "log"
 	"net"
 	"os"
 	"path/filepath"
@@ -32,6 +34,7 @@ import (
 	"github.com/coredns/coredns/plugin/metadata"
 	"github.com/coredns/coredns/plugin/test"
 	"github.com/miekg/dns"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 )
@@ -131,6 +134,135 @@ func TestServeDNS_MalformedUpstreamResponse(t *testing.T) {
 	rcode, err := f.ServeDNS(context.Background(), &test.ResponseWriter{}, req)
 	require.Equal(t, dns.RcodeServerFailure, rcode, "malformed upstream response must cause SERVFAIL")
 	require.Error(t, err)
+}
+
+// TestServeDNS_DebugOptionLogsIntermediateUpstreamFailures verifies that enabling the
+// fanout-specific debug option emits per-attempt upstream failure logs even when the
+// request ultimately ends with the normal final error flow.
+func TestServeDNS_DebugOptionLogsIntermediateUpstreamFailures(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	s := newServer(TCP, func(w dns.ResponseWriter, _ *dns.Msg) {
+		if conn, ok := w.(interface{ Close() error }); ok {
+			_ = conn.Close()
+		}
+	})
+	defer s.close()
+
+	var buf bytes.Buffer
+	oldWriter := stdlog.Writer()
+	oldFlags := stdlog.Flags()
+	oldPrefix := stdlog.Prefix()
+	stdlog.SetOutput(&buf)
+	stdlog.SetFlags(0)
+	stdlog.SetPrefix("")
+	defer func() {
+		stdlog.SetOutput(oldWriter)
+		stdlog.SetFlags(oldFlags)
+		stdlog.SetPrefix(oldPrefix)
+	}()
+
+	f := New()
+	f.Debug = true
+	f.From = "."
+	f.net = TCP
+	f.Attempts = 2
+	f.AddClient(NewClient(s.addr, TCP))
+
+	req := new(dns.Msg)
+	req.SetQuestion(testQuery, dns.TypeA)
+
+	_, err := f.ServeDNS(context.Background(), &test.ResponseWriter{}, req)
+	require.Error(t, err)
+
+	output := buf.String()
+	require.Contains(t, output, "plugin/fanout: upstream failure")
+	require.Contains(t, output, "upstream="+s.addr)
+	require.Contains(t, output, "attempt=1/2")
+	require.Contains(t, output, "qname="+testQuery)
+	require.Contains(t, output, "qtype=1")
+}
+
+// TestServeDNS_ErrorIsWrappedForCoreDNSErrorsPlugin verifies that request-level failures are
+// returned with the standard CoreDNS plugin prefix so the errors plugin logs a clear origin.
+func TestServeDNS_ErrorIsWrappedForCoreDNSErrorsPlugin(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	s := newServer(TCP, func(w dns.ResponseWriter, _ *dns.Msg) {
+		if conn, ok := w.(interface{ Close() error }); ok {
+			_ = conn.Close()
+		}
+	})
+	defer s.close()
+
+	f := New()
+	f.From = "."
+	f.net = TCP
+	f.Attempts = 1
+	f.AddClient(NewClient(s.addr, TCP))
+
+	req := new(dns.Msg)
+	req.SetQuestion(testQuery, dns.TypeA)
+
+	rcode, err := f.ServeDNS(context.Background(), &test.ResponseWriter{}, req)
+	require.Equal(t, dns.RcodeServerFailure, rcode)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "plugin/fanout:")
+}
+
+// TestServeDNS_WriteResponseErrorPropagates verifies that client write failures are returned to
+// CoreDNS instead of being swallowed locally, allowing the errors plugin to log them.
+func TestServeDNS_WriteResponseErrorPropagates(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	s := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+		msg := new(dns.Msg)
+		msg.SetReply(r)
+		msg.Answer = append(msg.Answer, test.A("example1. IN A 10.0.0.1"))
+		logErrIfNotNil(w.WriteMsg(msg))
+	})
+	defer s.close()
+
+	f := New()
+	f.From = "."
+	f.net = TCP
+	f.AddClient(NewClient(s.addr, TCP))
+
+	req := new(dns.Msg)
+	req.SetQuestion(testQuery, dns.TypeA)
+
+	writer := &failingDNSWriter{ResponseWriter: new(test.ResponseWriter), err: errors.New("write failed")}
+	rcode, err := f.ServeDNS(context.Background(), writer, req)
+	require.Equal(t, dns.RcodeServerFailure, rcode)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "plugin/fanout:")
+	require.Contains(t, err.Error(), "failed to write upstream response")
+}
+
+// TestServeDNS_WriteFormErrErrorPropagates verifies that a FORMERR fallback write failure is
+// returned to CoreDNS instead of being logged and ignored locally.
+func TestServeDNS_WriteFormErrErrorPropagates(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	s := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+		msg := new(dns.Msg)
+		msg.SetReply(r)
+		msg.Question = []dns.Question{{Name: "wrong.example.", Qclass: dns.ClassINET, Qtype: dns.TypeA}}
+		msg.Answer = append(msg.Answer, test.A("wrong.example. IN A 1.2.3.4"))
+		logErrIfNotNil(w.WriteMsg(msg))
+	})
+	defer s.close()
+
+	f := New()
+	f.From = "."
+	f.net = TCP
+	f.AddClient(NewClient(s.addr, TCP))
+
+	req := new(dns.Msg)
+	req.SetQuestion(testQuery, dns.TypeA)
+
+	writer := &failingDNSWriter{ResponseWriter: new(test.ResponseWriter), err: errors.New("write failed")}
+	rcode, err := f.ServeDNS(context.Background(), writer, req)
+	require.Equal(t, dns.RcodeFormatError, rcode)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "plugin/fanout:")
+	require.Contains(t, err.Error(), "failed to write format error response")
 }
 
 // ---------------------------------------------------------------------------
