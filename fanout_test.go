@@ -53,6 +53,15 @@ func (w *cachedDNSWriter) WriteMsg(m *dns.Msg) error {
 	return w.ResponseWriter.WriteMsg(m)
 }
 
+type failingDNSWriter struct {
+	*test.ResponseWriter
+	err error
+}
+
+func (w *failingDNSWriter) WriteMsg(_ *dns.Msg) error {
+	return w.err
+}
+
 type server struct {
 	addr  string
 	inner *dns.Server

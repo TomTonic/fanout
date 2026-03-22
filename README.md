@@ -60,6 +60,7 @@ fanout FROM TO... {
     except-file FILE
     attempt-count COUNT
     timeout DURATION
+    debug
     race
     race-continue-on-error-response
 }
@@ -88,6 +89,7 @@ fanout FROM TO... {
 * `except-file` — path to a file with line-separated domains to exclude from proxying.
 * `attempt-count` — the number of failed attempts before considering an upstream to be down. If `0`, the upstream will never be marked as down and the request will run until `timeout`. Default is `3`.
 * `timeout` — the maximum time for the entire request. Default is `30s`.
+* `debug` — emit per-upstream intermediate request failures through the `fanout` logger so failed attempts are visible even when another upstream still answers successfully.
 * `race` — gives priority to the first result, whether it is negative or not, as long as it is a valid DNS response.
 * `race-continue-on-error-response` — When enabled together with `race`, fanout does not early-return on non-success DNS responses (for example `SERVFAIL` or `NXDOMAIN`) and only early-returns on `RcodeSuccess`. The default is `false`.
 

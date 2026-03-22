@@ -51,6 +51,7 @@ func TestSetup(t *testing.T) {
 		expectedAttempts                    int
 		expectedTimeout                     time.Duration
 		expectedNetwork                     string
+		expectedDebug                       bool
 		expectedRace                        bool
 		expectedRaceContinueOnErrorResponse bool
 		expectedServerCount                 int
@@ -61,6 +62,7 @@ func TestSetup(t *testing.T) {
 		// positive
 		{name: "weighted-random-with-load-factor", input: "fanout . 127.0.0.1 {\npolicy weighted-random \nweighted-random-server-count 5 weighted-random-load-factor 100\n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 1, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedRace: false, expectedRaceContinueOnErrorResponse: false, expectedServerCount: 1, expectedLoadFactor: []int{100}, expectedPolicy: policyWeightedRandom},
 		{name: "minimal-config", input: "fanout . 127.0.0.1", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 1, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedRace: false, expectedRaceContinueOnErrorResponse: false, expectedServerCount: 1, expectedLoadFactor: nil, expectedPolicy: ""},
+		{name: "debug-enabled", input: "fanout . 127.0.0.1 {\ndebug\n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 1, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedDebug: true, expectedRace: false, expectedRaceContinueOnErrorResponse: false, expectedServerCount: 1, expectedLoadFactor: nil, expectedPolicy: ""},
 		{name: "weighted-random-short-aliases", input: "fanout . 127.0.0.1 {\npolicy weighted-random \nweighted-random-server-count 5\nweighted-random-load-factor 100\n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 1, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedRace: false, expectedRaceContinueOnErrorResponse: false, expectedServerCount: 1, expectedLoadFactor: []int{100}, expectedPolicy: policyWeightedRandom},
 		{name: "except-and-worker-count", input: "fanout . 127.0.0.1 {\nexcept a b\nworker-count 3\n}", expectedFrom: ".", expectedTimeout: defaultTimeout, expectedAttempts: 3, expectedWorkers: 1, expectedIgnored: []string{"a.", "b."}, expectedNetwork: "udp", expectedRace: false, expectedRaceContinueOnErrorResponse: false, expectedServerCount: 1, expectedLoadFactor: nil, expectedPolicy: ""},
 		{name: "two-hosts-tcp", input: "fanout . 127.0.0.1 127.0.0.2 {\nnetwork tcp\n}", expectedFrom: ".", expectedTimeout: defaultTimeout, expectedAttempts: 3, expectedWorkers: 2, expectedNetwork: "tcp", expectedRace: false, expectedRaceContinueOnErrorResponse: false, expectedTo: []string{"127.0.0.1:53", "127.0.0.2:53"}, expectedServerCount: 2, expectedLoadFactor: nil, expectedPolicy: ""},
@@ -131,6 +133,9 @@ func TestSetup(t *testing.T) {
 			}
 			if f.net != tc.expectedNetwork {
 				t.Fatalf("expected network: %v, got: %v", tc.expectedNetwork, f.net)
+			}
+			if f.Debug != tc.expectedDebug {
+				t.Fatalf("expected debug: %v, got: %v", tc.expectedDebug, f.Debug)
 			}
 			if f.Race != tc.expectedRace {
 				t.Fatalf("expected race: %v, got: %v", tc.expectedRace, f.Race)
