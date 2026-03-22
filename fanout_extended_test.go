@@ -406,6 +406,7 @@ func TestProcessClient_AttemptLimitReached(t *testing.T) {
 	require.Equal(t, dns.RcodeServerFailure, rcode)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "attempt limit has been reached")
+	require.Contains(t, err.Error(), s.addr, "error must include the upstream endpoint for diagnosis")
 }
 
 // ---------- 6. TLS Integration ----------
