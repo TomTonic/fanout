@@ -56,8 +56,26 @@ var (
 		Namespace: plugin.Namespace,
 		Subsystem: "fanout",
 		Name:      "request_error_count_total",
-		Help:      "Number of failed request attempts per upstream, grouped by bounded error class.",
+		Help:      "Number of request attempts that ended with an upstream error, grouped by bounded error class.",
 	}, []string{"error", "to"})
+	CancelCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: plugin.Namespace,
+		Subsystem: "fanout",
+		Name:      "request_cancel_count_total",
+		Help:      "Number of request attempts that were canceled locally before a final upstream outcome was received.",
+	}, []string{"to"})
+	SuccessCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: plugin.Namespace,
+		Subsystem: "fanout",
+		Name:      "request_success_count_total",
+		Help:      "Number of request attempts that completed with a valid DNS response per upstream.",
+	}, []string{"to"})
+	WinCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: plugin.Namespace,
+		Subsystem: "fanout",
+		Name:      "response_win_count_total",
+		Help:      "Number of selected upstream responses that fanout returned downstream per upstream.",
+	}, []string{"to"})
 	RcodeCount = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: plugin.Namespace,
 		Subsystem: "fanout",
@@ -94,7 +112,16 @@ func observeRequestError(to string, class requestErrorClass) {
 	ErrorCount.WithLabelValues(string(class), to).Inc()
 }
 
+func observeRequestCancellation(to string) {
+	CancelCount.WithLabelValues(to).Inc()
+}
+
+func observeRequestWin(to string) {
+	WinCount.WithLabelValues(to).Inc()
+}
+
 func observeRequestResponse(to string, start time.Time, resp *dns.Msg) {
+	SuccessCount.WithLabelValues(to).Inc()
 	RcodeCount.WithLabelValues(rcodeLabel(resp.Rcode), to).Inc()
 	RequestDuration.WithLabelValues(to).Observe(time.Since(start).Seconds())
 }
@@ -113,12 +140,12 @@ func withRequestErrorClass(err error, class requestErrorClass) error {
 	return &requestMetricError{class: class, err: err}
 }
 
-func requestErrorClassOf(err error, fallback requestErrorClass) requestErrorClass {
+func requestErrorClassOf(err error) requestErrorClass {
 	var metricErr *requestMetricError
 	if errors.As(err, &metricErr) {
 		return metricErr.class
 	}
-	return fallback
+	return requestErrorProtocol
 }
 
 func shouldSuppressRequestFailure(ctx context.Context, err error) bool {
@@ -139,4 +166,9 @@ func suppressedRequestFailure(ctx context.Context, err error) error {
 		return context.Canceled
 	}
 	return err
+}
+
+func observeSuppressedRequestFailure(ctx context.Context, to string, err error) error {
+	observeRequestCancellation(to)
+	return suppressedRequestFailure(ctx, err)
 }

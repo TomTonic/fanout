@@ -89,7 +89,7 @@ fanout FROM TO... {
 * `except-file` — path to a file with line-separated domains to exclude from proxying.
 * `attempt-count` — the number of failed attempts before considering an upstream to be down. If `0`, the upstream will never be marked as down and the request will run until `timeout`. Default is `3`.
 * `timeout` — the maximum time for the entire request. Default is `30s`.
-* `debug` — emit per-upstream intermediate request failures through the `fanout` logger so failed attempts are visible even when another upstream still answers successfully.
+* `debug` — emit per-upstream intermediate request failures through the `fanout` logger so defective upstream attempts remain visible even when another upstream still answers successfully. Expected local cancellations caused by fanout shutting down losing attempts are excluded from these warning lines.
 * `race` — gives priority to the first result, whether it is negative or not, as long as it is a valid DNS response.
 * `race-continue-on-error` — When enabled together with `race`, fanout does not early-return on erroneous DNS responses such as `SERVFAIL`, but still treats `NOERROR` and `NXDOMAIN` as terminal answers that can end the race immediately. The default is `false`.
 
@@ -98,13 +98,24 @@ fanout FROM TO... {
 If monitoring is enabled (via the *prometheus* plugin) then the following metrics are exported:
 
 * `coredns_fanout_request_count_total{to}` — request attempt count per upstream, including attempts that fail before a DNS response is received.
-* `coredns_fanout_request_error_count_total{to, error}` — failed request attempt count per upstream and error class.
-* `coredns_fanout_response_rcode_count_total{to, rcode}` — count of RCODEs per upstream (i.e., successf).
+* `coredns_fanout_request_error_count_total{to, error}` — request attempt count per upstream and bounded upstream error class.
+* `coredns_fanout_request_cancel_count_total{to}` — request attempt count per upstream that fanout canceled locally before a final upstream outcome was received.
+* `coredns_fanout_request_success_count_total{to}` — request attempt count per upstream that completed with a valid DNS response.
+* `coredns_fanout_response_win_count_total{to}` — selected upstream response count per upstream after fanout chose the response that was returned downstream.
+* `coredns_fanout_response_rcode_count_total{to, rcode}` — count of returned RCODEs per upstream.
 * `coredns_fanout_request_duration_seconds{to}` — duration of request attempts that completed with a valid DNS response.
 
 Where `to` is one of the upstream servers (**TO** from the config), `rcode` is the returned RCODE
 from the upstream, and `error` is one of the bounded classes used by fanout
 (for example `connect_failed`, `request_send_failed`, `response_read_failed`, or `response_decode_failed`).
+
+The counters are designed to follow a simple accounting model per upstream:
+
+* `request_count_total = request_error_count_total (summed over error labels) + request_cancel_count_total + request_success_count_total`
+* `request_success_count_total = response_rcode_count_total` summed over all `rcode` labels
+* `response_win_count_total <= request_success_count_total`
+
+When `debug` logging is enabled, fanout logs only defective upstream attempts and includes the normalized `error_class` field so warning lines can be correlated directly with `request_error_count_total`.
 
 ## Examples
 
