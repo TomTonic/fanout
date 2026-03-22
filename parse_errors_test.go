@@ -27,8 +27,9 @@ import (
 
 // TestParseErrors verifies argument validation during Corefile parsing for all configuration directives.
 // Table-driven test covering invalid Corefile snippets: missing arguments for network, policy,
-// timeout, tls-server, worker-count, except, race; too many TLS args; no upstream hosts; path escape
-// in except-file; unparseable timeout; timeout out of range; invalid worker-count; and bad load-factor format.
+// timeout, tls-server, worker-count, except, race, race-continue-on-error; too many TLS args;
+// no upstream hosts; path escape in except-file; unparseable timeout; timeout out of range;
+// invalid worker-count; and bad load-factor format.
 // Each case asserts that parseFanout returns an error containing the expected substring.
 func TestParseErrors(t *testing.T) {
 	tests := []struct {
@@ -44,6 +45,7 @@ func TestParseErrors(t *testing.T) {
 		{name: "err-missing-except", input: "fanout . 127.0.0.1 {\nexcept\n}", expectedErr: "Wrong argument count"},
 		{name: "err-too-many-tls-args", input: "fanout . 127.0.0.1 {\ntls 1 2 3 4\n}", expectedErr: "Wrong argument count"},
 		{name: "err-too-many-race-args", input: "fanout . 127.0.0.1 {\nrace 1\n}", expectedErr: "Wrong argument count"},
+		{name: "err-too-many-race-continue-on-error-args", input: "fanout . 127.0.0.1 {\nrace-continue-on-error 1\n}", expectedErr: "Wrong argument count"},
 		{name: "err-too-many-race-continue-on-error-response-args", input: "fanout . 127.0.0.1 {\nrace-continue-on-error-response 1\n}", expectedErr: "Wrong argument count"},
 		{name: "err-no-to-hosts", input: "fanout .", expectedErr: "Wrong argument count"},
 		{name: "err-except-file-escape", input: "fanout . 127.0.0.1 {\nexcept-file ../file.txt\n}", expectedErr: "path must be local"},

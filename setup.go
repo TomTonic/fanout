@@ -286,8 +286,8 @@ func parseValue(v string, f *Fanout, c *caddyfile.Dispenser) error {
 		return parseDebug(f, c)
 	case "race":
 		return parseRace(f, c)
-	case "race-continue-on-error-response":
-		return parseRaceContinueOnErrorResponse(f, c)
+	case "race-continue-on-error", "race-continue-on-error-response":
+		return parseRaceContinueOnError(f, c)
 	case "except":
 		return parseIgnored(f, c)
 	case "except-file":
@@ -350,7 +350,7 @@ func parseRace(f *Fanout, c *caddyfile.Dispenser) error {
 	return nil
 }
 
-func parseRaceContinueOnErrorResponse(f *Fanout, c *caddyfile.Dispenser) error {
+func parseRaceContinueOnError(f *Fanout, c *caddyfile.Dispenser) error {
 	if c.NextArg() {
 		return c.ArgErr()
 	}

@@ -62,7 +62,7 @@ fanout FROM TO... {
     timeout DURATION
     debug
     race
-    race-continue-on-error-response
+    race-continue-on-error
 }
 ```
 
@@ -91,7 +91,7 @@ fanout FROM TO... {
 * `timeout` — the maximum time for the entire request. Default is `30s`.
 * `debug` — emit per-upstream intermediate request failures through the `fanout` logger so failed attempts are visible even when another upstream still answers successfully.
 * `race` — gives priority to the first result, whether it is negative or not, as long as it is a valid DNS response.
-* `race-continue-on-error-response` — When enabled together with `race`, fanout does not early-return on erroneous DNS responses such as `SERVFAIL`, but still treats `NOERROR` and `NXDOMAIN` as terminal answers that can end the race immediately. The default is `false`.
+* `race-continue-on-error` — When enabled together with `race`, fanout does not early-return on erroneous DNS responses such as `SERVFAIL`, but still treats `NOERROR` and `NXDOMAIN` as terminal answers that can end the race immediately. The default is `false`.
 
 ## Metrics
 
@@ -225,20 +225,20 @@ Multiple upstreams are configured but one of them is down. With `race` enabled, 
 By default `race` will return the first DNS response that arrives as long as it is a
 valid DNS result — this may be a non-success RCODE such as `SERVFAIL` or `NXDOMAIN`.
 
-If you prefer to keep the latency benefits of `race` but avoid early‑returning on error responses,
-enable `race-continue-on-error-response`. When both `race` and
-`race-continue-on-error-response` are set, fanout will only early‑return for `RcodeSuccess` and will
-wait briefly for a successful response instead of immediately accepting a fast negative result.
+If you prefer to keep the latency benefits of `race` but avoid early-returning on upstream error responses,
+enable `race-continue-on-error`. When both `race` and `race-continue-on-error` are set, fanout will
+still end the race immediately for `NOERROR` and `NXDOMAIN`, but it will keep waiting when a fast
+upstream returns an error such as `SERVFAIL`.
 
 Example: A fast upstream returns `SERVFAIL` and a slow upstream returns `NOERROR`. With
-`race` alone the user receives `SERVFAIL`; with `race` and `race-continue-on-error-response` set the
+`race` alone the user receives `SERVFAIL`; with `race` and `race-continue-on-error` set the
 user receives a successful domain name resolution (if it arrives before the request timeout).
 
 ~~~ corefile
 . {
     fanout . 10.0.0.10:53 10.0.0.11:53 10.0.0.12:53 {
         race
-        race-continue-on-error-response
+        race-continue-on-error
     }
 }
 ~~~

@@ -81,7 +81,7 @@ func TestServeDNS_RaceMode(t *testing.T) {
 }
 
 // TestServeDNS_RaceMode_DefaultReturnsFirstErrorResponse verifies the default race behavior:
-// with race enabled and race-continue-on-error-response disabled (default), fanout returns the
+// with race enabled and race-continue-on-error disabled (default), fanout returns the
 // first DNS response even when it carries a non-success RCODE such as SERVFAIL.
 func TestServeDNS_RaceMode_DefaultReturnsFirstErrorResponse(t *testing.T) {
 	defer goleak.VerifyNone(t)
@@ -121,20 +121,30 @@ func TestServeDNS_RaceMode_DefaultReturnsFirstErrorResponse(t *testing.T) {
 }
 
 // TestServeDNS_RaceMode_ContinueOnErrorResponseWaitsForSuccess verifies the new behavior:
-// when race and race-continue-on-error-response are both enabled, fanout does not early-return
+// when race and race-continue-on-error are both enabled, fanout does not early-return
 // on a fast non-success response and instead waits for a successful response if one arrives.
 func TestServeDNS_RaceMode_ContinueOnErrorResponseWaitsForSuccess(t *testing.T) {
+	testRaceContinueOnErrorTerminalResponse(t, dns.RcodeServerFailure, dns.RcodeSuccess)
+}
+
+// TestServeDNS_RaceMode_ContinueOnErrorResponseReturnsNXDOMAIN verifies that NXDOMAIN is
+// treated as a non-erroneous answer in race mode and therefore aborts the race like NOERROR.
+func TestServeDNS_RaceMode_ContinueOnErrorResponseReturnsNXDOMAIN(t *testing.T) {
+	testRaceContinueOnErrorTerminalResponse(t, dns.RcodeNameError, dns.RcodeNameError)
+}
+
+func testRaceContinueOnErrorTerminalResponse(t *testing.T, fastRcode, expectedRcode int) {
 	defer goleak.VerifyNone(t)
 
-	// Fast server returns SERVFAIL.
+	// Fast server returns the candidate terminal RCODE.
 	s1 := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
-		msg.SetRcode(r, dns.RcodeServerFailure)
+		msg.SetRcode(r, fastRcode)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 	defer s1.close()
 
-	// Slow server returns SUCCESS.
+	// Slow server returns SUCCESS and only wins when the fast response is not terminal.
 	s2 := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
 		time.Sleep(150 * time.Millisecond)
 		msg := new(dns.Msg)
@@ -158,47 +168,7 @@ func TestServeDNS_RaceMode_ContinueOnErrorResponseWaitsForSuccess(t *testing.T) 
 	_, err := f.ServeDNS(context.Background(), writer, req)
 	require.NoError(t, err)
 	require.Len(t, writer.answers, 1)
-	require.Equal(t, dns.RcodeSuccess, writer.answers[0].Rcode)
-}
-
-// TestServeDNS_RaceMode_ContinueOnErrorResponseReturnsNXDOMAIN verifies that NXDOMAIN is
-// treated as a non-erroneous answer in race mode and therefore aborts the race like NOERROR.
-func TestServeDNS_RaceMode_ContinueOnErrorResponseReturnsNXDOMAIN(t *testing.T) {
-	defer goleak.VerifyNone(t)
-
-	// Fast server returns NXDOMAIN.
-	s1 := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
-		msg := new(dns.Msg)
-		msg.SetRcode(r, dns.RcodeNameError)
-		logErrIfNotNil(w.WriteMsg(msg))
-	})
-	defer s1.close()
-
-	// Slow server returns SUCCESS, which should no longer be awaited once NXDOMAIN arrives.
-	s2 := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
-		time.Sleep(150 * time.Millisecond)
-		msg := new(dns.Msg)
-		msg.SetReply(r)
-		msg.Answer = append(msg.Answer, test.A("example1. IN A 10.0.0.4"))
-		logErrIfNotNil(w.WriteMsg(msg))
-	})
-	defer s2.close()
-
-	f := New()
-	f.From = "."
-	f.Race = true
-	f.RaceContinueOnErrorResponse = true
-	f.net = TCP
-	f.AddClient(NewClient(s1.addr, TCP))
-	f.AddClient(NewClient(s2.addr, TCP))
-
-	req := new(dns.Msg)
-	req.SetQuestion(testQuery, dns.TypeA)
-	writer := &cachedDNSWriter{ResponseWriter: new(test.ResponseWriter)}
-	_, err := f.ServeDNS(context.Background(), writer, req)
-	require.NoError(t, err)
-	require.Len(t, writer.answers, 1)
-	require.Equal(t, dns.RcodeNameError, writer.answers[0].Rcode)
+	require.Equal(t, expectedRcode, writer.answers[0].Rcode)
 }
 
 // TestServeDNS_DomainMismatch_CallsNext verifies request routing: if the query name does not
