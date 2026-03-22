@@ -17,6 +17,7 @@
 package fanout
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -118,4 +119,24 @@ func requestErrorClassOf(err error, fallback requestErrorClass) requestErrorClas
 		return metricErr.class
 	}
 	return fallback
+}
+
+func shouldSuppressRequestFailure(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	return errors.Is(ctx.Err(), context.Canceled)
+}
+
+func suppressedRequestFailure(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	return err
 }

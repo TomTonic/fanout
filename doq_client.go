@@ -120,6 +120,9 @@ func (c *doqClient) Request(ctx context.Context, r *request.Request) (*dns.Msg, 
 
 	conn, err := c.getOrDialConn(ctx)
 	if err != nil {
+		if shouldSuppressRequestFailure(ctx, err) {
+			return nil, suppressedRequestFailure(ctx, err)
+		}
 		observeRequestError(c.addr, requestErrorConnect)
 		return nil, errors.Wrap(err, "failed to establish QUIC connection")
 	}
@@ -131,11 +134,17 @@ func (c *doqClient) Request(ctx context.Context, r *request.Request) (*dns.Msg, 
 		c.resetConn()
 		conn, err = c.getOrDialConn(ctx)
 		if err != nil {
+			if shouldSuppressRequestFailure(ctx, err) {
+				return nil, suppressedRequestFailure(ctx, err)
+			}
 			observeRequestError(c.addr, requestErrorReconnect)
 			return nil, errors.Wrap(err, "failed to re-establish QUIC connection")
 		}
 		stream, err = conn.OpenStreamSync(ctx)
 		if err != nil {
+			if shouldSuppressRequestFailure(ctx, err) {
+				return nil, suppressedRequestFailure(ctx, err)
+			}
 			observeRequestError(c.addr, requestErrorStreamOpen)
 			return nil, errors.Wrap(err, "failed to open QUIC stream")
 		}
@@ -143,6 +152,9 @@ func (c *doqClient) Request(ctx context.Context, r *request.Request) (*dns.Msg, 
 
 	ret, err := c.exchangeOnStream(ctx, stream, r.Req)
 	if err != nil {
+		if shouldSuppressRequestFailure(ctx, err) {
+			return nil, suppressedRequestFailure(ctx, err)
+		}
 		observeRequestError(c.addr, requestErrorClassOf(err, requestErrorProtocol))
 		return nil, err
 	}

@@ -19,6 +19,7 @@ package fanout
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	stdlog "log"
 	"net"
 	"os"
@@ -33,11 +34,31 @@ import (
 	"github.com/coredns/caddy"
 	"github.com/coredns/coredns/plugin/metadata"
 	"github.com/coredns/coredns/plugin/test"
+	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 )
+
+type loggingClientStub struct {
+	endpoint string
+	network  string
+}
+
+func (c loggingClientStub) Request(context.Context, *request.Request) (*dns.Msg, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (c loggingClientStub) Endpoint() string {
+	return c.endpoint
+}
+
+func (c loggingClientStub) Net() string {
+	return c.network
+}
+
+func (c loggingClientStub) SetTLSConfig(*tls.Config) {}
 
 // ---------------------------------------------------------------------------
 // P1 – Critical functional gaps
@@ -180,6 +201,39 @@ func TestServeDNS_DebugOptionLogsIntermediateUpstreamFailures(t *testing.T) {
 	require.Contains(t, output, "attempt=1/2")
 	require.Contains(t, output, "qname="+testQuery)
 	require.Contains(t, output, "qtype=1")
+	require.Contains(t, output, "error_class=")
+}
+
+// TestLogIntermediateFailure_SuppressesCancelledTransportNoise verifies that expected local
+// transport aborts after context cancellation are not logged as upstream failures.
+func TestLogIntermediateFailure_SuppressesCancelledTransportNoise(t *testing.T) {
+	var buf bytes.Buffer
+	oldWriter := stdlog.Writer()
+	oldFlags := stdlog.Flags()
+	oldPrefix := stdlog.Prefix()
+	stdlog.SetOutput(&buf)
+	stdlog.SetFlags(0)
+	stdlog.SetPrefix("")
+	defer func() {
+		stdlog.SetOutput(oldWriter)
+		stdlog.SetFlags(oldFlags)
+		stdlog.SetPrefix(oldPrefix)
+	}()
+
+	f := New()
+	f.Debug = true
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	req := new(dns.Msg)
+	req.SetQuestion(testQuery, dns.TypeA)
+	state := &request.Request{W: &test.ResponseWriter{}, Req: req}
+	err := withRequestErrorClass(errors.New("read udp 127.0.0.1:1->127.0.0.1:2: use of closed network connection"), requestErrorResponseRead)
+
+	f.logIntermediateFailure(ctx, loggingClientStub{endpoint: "127.0.0.1:5301", network: UDP}, state, 1, err)
+
+	require.Empty(t, buf.String())
 }
 
 // TestServeDNS_ErrorIsWrappedForCoreDNSErrorsPlugin verifies that request-level failures are

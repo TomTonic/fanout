@@ -236,20 +236,26 @@ func (f *Fanout) processClient(ctx context.Context, c Client, r *request.Request
 }
 
 func (f *Fanout) logIntermediateFailure(ctx context.Context, c Client, r *request.Request, attempt int, err error) {
-	if !f.Debug || err == nil || errors.Is(err, context.Canceled) {
+	if !f.Debug || err == nil || shouldSuppressRequestFailure(ctx, err) {
 		return
 	}
 	log.Warningf(
-		"upstream failure: upstream=%s network=%s attempt=%s qname=%s qtype=%d error=%v",
+		"upstream failure: upstream=%s network=%s attempt=%s qname=%s qtype=%d error_class=%s error=%v",
 		c.Endpoint(),
 		c.Net(),
 		f.attemptLabel(attempt),
 		r.QName(),
 		r.QType(),
+		requestErrorClassOf(err, requestErrorProtocol),
 		err,
 	)
-	if ctx.Err() != nil && !errors.Is(ctx.Err(), context.Canceled) {
-		log.Warningf("request context after upstream failure: upstream=%s context_error=%v", c.Endpoint(), ctx.Err())
+	if ctx.Err() != nil {
+		log.Warningf(
+			"request context after upstream failure: upstream=%s error_class=%s context_error=%v",
+			c.Endpoint(),
+			requestErrorClassOf(err, requestErrorProtocol),
+			ctx.Err(),
+		)
 	}
 }
 

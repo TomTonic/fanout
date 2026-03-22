@@ -192,6 +192,29 @@ func TestDoHRequestMetricsOnContentTypeFailure(t *testing.T) {
 	require.Zero(t, unexpectedLabelValue)
 }
 
+// TestDoHRequestMetricsIgnoreLocalCancellation verifies that a locally cancelled request
+// still counts as an attempt but does not inflate upstream error counters.
+func TestDoHRequestMetricsIgnoreLocalCancellation(t *testing.T) {
+	const endpoint = "https://metrics.example/cancelled"
+	before := snapshotMetrics(t, endpoint, requestErrorRequestSend, dns.RcodeToString[dns.RcodeSuccess])
+
+	ctx, cancel := context.WithCancel(context.Background())
+	httpClient := &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	})}
+	cancel()
+
+	_, err := dohRoundTrip(ctx, httpClient, endpoint, newTestRequest())
+	require.ErrorIs(t, err, context.Canceled)
+
+	after := snapshotMetrics(t, endpoint, requestErrorRequestSend, dns.RcodeToString[dns.RcodeSuccess])
+	require.Equal(t, before.attempts+1, after.attempts)
+	require.Equal(t, before.errorCount, after.errorCount)
+	require.Equal(t, before.rcodeCount, after.rcodeCount)
+	require.Equal(t, before.durationCount, after.durationCount)
+}
+
 func newTestRequest() *request.Request {
 	req := new(dns.Msg)
 	req.SetQuestion("example.org.", dns.TypeA)
