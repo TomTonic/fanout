@@ -91,7 +91,7 @@ fanout FROM TO... {
 * `timeout` — the maximum time for the entire request. Default is `30s`.
 * `debug` — emit per-upstream intermediate request failures through the `fanout` logger so failed attempts are visible even when another upstream still answers successfully.
 * `race` — gives priority to the first result, whether it is negative or not, as long as it is a valid DNS response.
-* `race-continue-on-error-response` — When enabled together with `race`, fanout does not early-return on non-success DNS responses (for example `SERVFAIL` or `NXDOMAIN`) and only early-returns on `RcodeSuccess`. The default is `false`.
+* `race-continue-on-error-response` — When enabled together with `race`, fanout does not early-return on erroneous DNS responses such as `SERVFAIL`, but still treats `NOERROR` and `NXDOMAIN` as terminal answers that can end the race immediately. The default is `false`.
 
 ## Metrics
 

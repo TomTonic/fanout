@@ -161,6 +161,46 @@ func TestServeDNS_RaceMode_ContinueOnErrorResponseWaitsForSuccess(t *testing.T) 
 	require.Equal(t, dns.RcodeSuccess, writer.answers[0].Rcode)
 }
 
+// TestServeDNS_RaceMode_ContinueOnErrorResponseReturnsNXDOMAIN verifies that NXDOMAIN is
+// treated as a non-erroneous answer in race mode and therefore aborts the race like NOERROR.
+func TestServeDNS_RaceMode_ContinueOnErrorResponseReturnsNXDOMAIN(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	// Fast server returns NXDOMAIN.
+	s1 := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+		msg := new(dns.Msg)
+		msg.SetRcode(r, dns.RcodeNameError)
+		logErrIfNotNil(w.WriteMsg(msg))
+	})
+	defer s1.close()
+
+	// Slow server returns SUCCESS, which should no longer be awaited once NXDOMAIN arrives.
+	s2 := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+		time.Sleep(150 * time.Millisecond)
+		msg := new(dns.Msg)
+		msg.SetReply(r)
+		msg.Answer = append(msg.Answer, test.A("example1. IN A 10.0.0.4"))
+		logErrIfNotNil(w.WriteMsg(msg))
+	})
+	defer s2.close()
+
+	f := New()
+	f.From = "."
+	f.Race = true
+	f.RaceContinueOnErrorResponse = true
+	f.net = TCP
+	f.AddClient(NewClient(s1.addr, TCP))
+	f.AddClient(NewClient(s2.addr, TCP))
+
+	req := new(dns.Msg)
+	req.SetQuestion(testQuery, dns.TypeA)
+	writer := &cachedDNSWriter{ResponseWriter: new(test.ResponseWriter)}
+	_, err := f.ServeDNS(context.Background(), writer, req)
+	require.NoError(t, err)
+	require.Len(t, writer.answers, 1)
+	require.Equal(t, dns.RcodeNameError, writer.answers[0].Rcode)
+}
+
 // TestServeDNS_DomainMismatch_CallsNext verifies request routing: if the query name does not
 // match the configured From zone, the plugin must delegate to the next plugin in the chain.
 // Configures From="example.org.", sends a query for "other.com.", and verifies the next handler is invoked.
