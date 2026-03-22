@@ -70,7 +70,8 @@ func TestSetup(t *testing.T) {
 		{name: "attempt-count", input: "fanout . 127.0.0.1 127.0.0.2 127.0.0.3 127.0.0.4 {\nattempt-count 2\n}", expectedTimeout: defaultTimeout, expectedFrom: ".", expectedAttempts: 2, expectedWorkers: 4, expectedNetwork: "udp", expectedRace: false, expectedRaceContinueOnErrorResponse: false, expectedServerCount: 4, expectedLoadFactor: nil, expectedPolicy: ""},
 		{name: "weighted-random-default-load-factor", input: "fanout . 127.0.0.1 127.0.0.2 127.0.0.3 {\npolicy weighted-random \n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 3, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedRace: false, expectedRaceContinueOnErrorResponse: false, expectedServerCount: 3, expectedLoadFactor: []int{100, 100, 100}, expectedPolicy: policyWeightedRandom},
 		{name: "sequential-policy", input: "fanout . 127.0.0.1 127.0.0.2 127.0.0.3 {\npolicy sequential\nworker-count 3\n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 3, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedRace: false, expectedRaceContinueOnErrorResponse: false, expectedServerCount: 3, expectedLoadFactor: nil, expectedPolicy: policySequential},
-		{name: "race-with-continue-on-error-response", input: "fanout . 127.0.0.1 {\nrace\nrace-continue-on-error-response\n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 1, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedRace: true, expectedRaceContinueOnErrorResponse: true, expectedServerCount: 1, expectedLoadFactor: nil, expectedPolicy: ""},
+		{name: "race-with-continue-on-error", input: "fanout . 127.0.0.1 {\nrace\nrace-continue-on-error\n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 1, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedRace: true, expectedRaceContinueOnErrorResponse: true, expectedServerCount: 1, expectedLoadFactor: nil, expectedPolicy: ""},
+		{name: "race-with-continue-on-error-legacy-alias", input: "fanout . 127.0.0.1 {\nrace\nrace-continue-on-error-response\n}", expectedFrom: ".", expectedAttempts: 3, expectedWorkers: 1, expectedTimeout: defaultTimeout, expectedNetwork: "udp", expectedRace: true, expectedRaceContinueOnErrorResponse: true, expectedServerCount: 1, expectedLoadFactor: nil, expectedPolicy: ""},
 
 		// negative
 		{name: "err-invalid-host", input: "fanout . aaa", expectedErr: "not an IP address or file"},
@@ -141,7 +142,7 @@ func TestSetup(t *testing.T) {
 				t.Fatalf("expected race: %v, got: %v", tc.expectedRace, f.Race)
 			}
 			if f.RaceContinueOnErrorResponse != tc.expectedRaceContinueOnErrorResponse {
-				t.Fatalf("expected race-continue-on-error-response: %v, got: %v", tc.expectedRaceContinueOnErrorResponse, f.RaceContinueOnErrorResponse)
+				t.Fatalf("expected race-continue-on-error: %v, got: %v", tc.expectedRaceContinueOnErrorResponse, f.RaceContinueOnErrorResponse)
 			}
 			if f.serverCount != tc.expectedServerCount {
 				t.Fatalf("expected serverCount: %d, got: %d", tc.expectedServerCount, f.serverCount)
