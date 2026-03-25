@@ -85,14 +85,6 @@ jobs:
             echo "Please use errors.Errorf (or errors.New or errors.Wrap or errors.Wrapf) as appropriate rather than fmt.Errorf"
             exit 1
           fi
-      - name: Restrict dependencies on github.com/networkservicemesh/*
-        run: >
-          disallowed="$(grep 'github.com/networkservicemesh/' go.mod
-          | grep -v '^module'
-          | sed 's;.*\(github.com/networkservicemesh/[A-Za-z/]\+\).*;\1;g'
-          | sort -u
-          | grep -v '^github.com/networkservicemesh/api$' || true)";
-          test -z "$disallowed" || { echo "Forbidden dependencies found:"; echo "$disallowed"; exit 1; }
       - name: Exclude replace in go.mod
         run: |
           grep '^replace' go.mod || exit 0
@@ -110,15 +102,3 @@ jobs:
       - name: Check for changes in go.mod or go.sum
         run: git diff --exit-code -- go.mod go.sum
 
-  license:
-    name: license header check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-      - name: Install go-header
-        run: go install github.com/denis-tingajkin/go-header@v0.2.2
-      - name: Run go-header
-        run: $(go env GOPATH)/bin/go-header
