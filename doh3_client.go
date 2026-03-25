@@ -19,7 +19,6 @@ package fanout
 import (
 	"context"
 	"crypto/tls"
-	"net"
 	"net/http"
 	"sync"
 
@@ -33,9 +32,9 @@ import (
 // It follows RFC 8484 at the application layer while using QUIC (RFC 9000) as the transport,
 // providing reduced connection-establishment latency and improved multiplexing.
 type doh3Client struct {
-	endpoint      string        // full URL, e.g. "https://dns.google/dns-query"
-	resolver      *net.Resolver // bootstrap resolver for hostname resolution (nil = system default)
-	mu            sync.Mutex    // protects h3Client, transport, and oldTransports during SetTLSConfig
+	endpoint      string           // full URL, e.g. "https://dns.google/dns-query"
+	bootstrap     *bootstrapConfig // bootstrap config for hostname resolution (nil = system default)
+	mu            sync.Mutex       // protects h3Client, transport, and oldTransports during SetTLSConfig
 	h3Client      *http.Client
 	transport     *http3.Transport
 	oldTransports []*http3.Transport // transports replaced by SetTLSConfig, awaiting cleanup
@@ -56,7 +55,7 @@ func newDoH3ClientWithTLS(endpoint string, tlsConfig *tls.Config) Client {
 // When a bootstrap resolver is provided the QUIC transport uses a custom Dial
 // function that resolves the server hostname through the bootstrap resolver
 // instead of the system default, breaking circular DNS dependencies.
-func newDoH3ClientFull(endpoint string, tlsConfig *tls.Config, resolver *net.Resolver) Client {
+func newDoH3ClientFull(endpoint string, tlsConfig *tls.Config, bootstrap *bootstrapConfig) Client {
 	if tlsConfig == nil {
 		tlsConfig = &tls.Config{
 			MinVersion: tls.VersionTLS13,
@@ -72,13 +71,13 @@ func newDoH3ClientFull(endpoint string, tlsConfig *tls.Config, resolver *net.Res
 	h3Transport := &http3.Transport{
 		TLSClientConfig: tlsConfig,
 	}
-	if resolver != nil {
-		h3Transport.Dial = bootstrapQUICDial(resolver)
+	if bootstrap != nil {
+		h3Transport.Dial = bootstrapQUICDial(bootstrap)
 	}
 
 	return &doh3Client{
 		endpoint:  endpoint,
-		resolver:  resolver,
+		bootstrap: bootstrap,
 		transport: h3Transport,
 		h3Client: &http.Client{
 			Transport: h3Transport,
@@ -88,11 +87,11 @@ func newDoH3ClientFull(endpoint string, tlsConfig *tls.Config, resolver *net.Res
 }
 
 // bootstrapQUICDial returns a Dial function for http3.Transport that resolves
-// the target hostname through the given bootstrap resolver before establishing
+// the target hostname through the given bootstrap config before establishing
 // the QUIC connection. The original hostname is preserved as TLS ServerName.
-func bootstrapQUICDial(resolver *net.Resolver) func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+func bootstrapQUICDial(bootstrap *bootstrapConfig) func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
 	return func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
-		resolved, hostname, err := bootstrapResolveHost(ctx, resolver, addr)
+		resolved, hostname, err := bootstrap.resolveHost(ctx, addr)
 		if err != nil {
 			return nil, err
 		}
@@ -121,8 +120,8 @@ func (c *doh3Client) SetTLSConfig(cfg *tls.Config) {
 	newTransport := &http3.Transport{
 		TLSClientConfig: cfg.Clone(),
 	}
-	if c.resolver != nil {
-		newTransport.Dial = bootstrapQUICDial(c.resolver)
+	if c.bootstrap != nil {
+		newTransport.Dial = bootstrapQUICDial(c.bootstrap)
 	}
 	newClient := &http.Client{
 		Transport: newTransport,

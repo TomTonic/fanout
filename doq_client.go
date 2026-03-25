@@ -22,7 +22,6 @@ import (
 	"encoding/binary"
 	"io"
 	"math"
-	"net"
 	"sync"
 	"time"
 
@@ -45,9 +44,9 @@ const doqInternalError quic.ApplicationErrorCode = 0x1
 // It uses one QUIC stream per query on a persistent connection, providing
 // low-latency DNS resolution with TLS 1.3 encryption and multiplexing.
 type doqClient struct {
-	addr      string        // host:port of the DoQ server
-	resolver  *net.Resolver // bootstrap resolver for hostname resolution (nil = system default)
-	mu        sync.Mutex    // protects conn and tlsConfig
+	addr      string           // host:port of the DoQ server
+	bootstrap *bootstrapConfig // bootstrap config for hostname resolution (nil = system default)
+	mu        sync.Mutex       // protects conn and tlsConfig
 	conn      *quic.Conn
 	tlsConfig *tls.Config
 }
@@ -66,7 +65,7 @@ func newDoQClientWithTLS(addr string, tlsConfig *tls.Config) Client {
 // newDoQClientFull creates a DoQ client with optional TLS override and bootstrap resolver.
 // When a bootstrap resolver is provided, hostname resolution for the server
 // address uses that resolver instead of the system default.
-func newDoQClientFull(addr string, tlsConfig *tls.Config, resolver *net.Resolver) Client {
+func newDoQClientFull(addr string, tlsConfig *tls.Config, bootstrap *bootstrapConfig) Client {
 	if tlsConfig == nil {
 		tlsConfig = &tls.Config{
 			MinVersion: tls.VersionTLS13,
@@ -81,7 +80,7 @@ func newDoQClientFull(addr string, tlsConfig *tls.Config, resolver *net.Resolver
 
 	return &doqClient{
 		addr:      addr,
-		resolver:  resolver,
+		bootstrap: bootstrap,
 		tlsConfig: tlsConfig,
 	}
 }
@@ -287,8 +286,8 @@ func (c *doqClient) getOrDialConn(ctx context.Context) (*quic.Conn, error) {
 	tlsCfg := c.tlsConfig.Clone()
 	dialAddr := c.addr
 
-	if c.resolver != nil {
-		resolved, hostname, err := bootstrapResolveHost(ctx, c.resolver, c.addr)
+	if c.bootstrap != nil {
+		resolved, hostname, err := c.bootstrap.resolveHost(ctx, c.addr)
 		if err != nil {
 			return nil, err
 		}
