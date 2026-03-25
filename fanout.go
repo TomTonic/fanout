@@ -57,6 +57,7 @@ type Fanout struct {
 	loadFactor            []int
 	policyType            string
 	ServerSelectionPolicy policy
+	bootstrap             *bootstrapConfig
 	TapPlugin             *dnstap.Dnstap
 	Next                  plugin.Handler
 }

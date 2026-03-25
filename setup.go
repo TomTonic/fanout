@@ -205,7 +205,7 @@ func initClients(f *Fanout, hosts []string) {
 // to the fanout's client list. Each URL must be a full HTTPS endpoint (e.g. "https://dns.google/dns-query").
 func initDoHClients(f *Fanout, urls []string) {
 	for _, u := range urls {
-		c := NewDoHClient(u)
+		c := newDoHClientFull(u, nil, f.bootstrap)
 		if f.tlsConfig != nil && f.tlsConfig.ServerName != "" {
 			c.SetTLSConfig(f.tlsConfig)
 		}
@@ -217,7 +217,7 @@ func initDoHClients(f *Fanout, urls []string) {
 // URLs and appends them to the fanout's client list.
 func initDoH3Clients(f *Fanout, urls []string) {
 	for _, u := range urls {
-		c := NewDoH3Client(u)
+		c := newDoH3ClientFull(u, nil, f.bootstrap)
 		if f.tlsConfig != nil && f.tlsConfig.ServerName != "" {
 			c.SetTLSConfig(f.tlsConfig)
 		}
@@ -229,7 +229,7 @@ func initDoH3Clients(f *Fanout, urls []string) {
 // and appends them to the fanout's client list.
 func initDoQClients(f *Fanout, addrs []string) {
 	for _, a := range addrs {
-		c := NewDoQClient(a)
+		c := newDoQClientFull(a, nil, f.bootstrap)
 		if f.tlsConfig != nil && f.tlsConfig.ServerName != "" {
 			c.SetTLSConfig(f.tlsConfig)
 		}
@@ -262,43 +262,45 @@ func initServerSelectionPolicy(f *Fanout) error {
 	return nil
 }
 
+// parseRegistry maps Corefile directive names to their parse functions.
+var parseRegistry = map[string]func(*Fanout, *caddyfile.Dispenser) error{
+	"tls":                             parseTLS,
+	"network":                         parseProtocol,
+	"tls-server":                      parseTLSServer,
+	"worker-count":                    parseWorkerCount,
+	"policy":                          parsePolicy,
+	"weighted-random-server-count":    parseWeightedRandomServerCount,
+	"weighted-random-load-factor":     parseLoadFactor,
+	"timeout":                         parseTimeout,
+	"debug":                           parseDebug,
+	"race":                            parseRace,
+	"race-continue-on-error":          parseRaceContinueOnError,
+	"race-continue-on-error-response": parseRaceContinueOnError,
+	"bootstrap":                       parseBootstrap,
+	"ecs":                             parseECS,
+	"except":                          parseIgnored,
+	"except-file":                     parseIgnoredFromFile,
+	"attempt-count":                   parseAttemptCount,
+}
+
 func parseValue(v string, f *Fanout, c *caddyfile.Dispenser) error {
-	switch v {
-	case "tls":
-		return parseTLS(f, c)
-	case "network":
-		return parseProtocol(f, c)
-	case "tls-server":
-		return parseTLSServer(f, c)
-	case "worker-count":
-		return parseWorkerCount(f, c)
-	case "policy":
-		return parsePolicy(f, c)
-	case "weighted-random-server-count":
-		serverCount, err := parsePositiveInt(c)
-		f.serverCount = serverCount
-		return err
-	case "weighted-random-load-factor":
-		return parseLoadFactor(f, c)
-	case "timeout":
-		return parseTimeout(f, c)
-	case "debug":
-		return parseDebug(f, c)
-	case "race":
-		return parseRace(f, c)
-	case "race-continue-on-error", "race-continue-on-error-response":
-		return parseRaceContinueOnError(f, c)
-	case "except":
-		return parseIgnored(f, c)
-	case "except-file":
-		return parseIgnoredFromFile(f, c)
-	case "attempt-count":
-		num, err := parsePositiveInt(c)
-		f.Attempts = num
-		return err
-	default:
+	handler, ok := parseRegistry[v]
+	if !ok {
 		return errors.Errorf("unknown property %v", v)
 	}
+	return handler(f, c)
+}
+
+func parseWeightedRandomServerCount(f *Fanout, c *caddyfile.Dispenser) error {
+	serverCount, err := parsePositiveInt(c)
+	f.serverCount = serverCount
+	return err
+}
+
+func parseAttemptCount(f *Fanout, c *caddyfile.Dispenser) error {
+	num, err := parsePositiveInt(c)
+	f.Attempts = num
+	return err
 }
 
 func parseDebug(f *Fanout, c *caddyfile.Dispenser) error {
@@ -355,6 +357,54 @@ func parseRaceContinueOnError(f *Fanout, c *caddyfile.Dispenser) error {
 		return c.ArgErr()
 	}
 	f.RaceContinueOnErrorResponse = true
+	return nil
+}
+
+func parseBootstrap(f *Fanout, c *caddyfile.Dispenser) error {
+	args := c.RemainingArgs()
+	if len(args) == 0 {
+		return c.ArgErr()
+	}
+	addrs := make([]string, 0, len(args))
+	for _, a := range args {
+		if _, _, err := net.SplitHostPort(a); err != nil {
+			a = net.JoinHostPort(a, "53")
+		}
+		host, _, err := net.SplitHostPort(a)
+		if err != nil {
+			return c.Errf("invalid bootstrap address %q: %v", a, err)
+		}
+		if net.ParseIP(host) == nil {
+			return c.Errf("bootstrap address must be an IP literal: %q", host)
+		}
+		addrs = append(addrs, a)
+	}
+	f.bootstrap = newBootstrapConfig(addrs)
+	return nil
+}
+
+func parseECS(f *Fanout, c *caddyfile.Dispenser) error {
+	if f.bootstrap == nil {
+		return c.Errf("ecs requires a prior bootstrap directive")
+	}
+	args := c.RemainingArgs()
+	switch len(args) {
+	case 0:
+		// Auto-detect from outgoing IP toward the first reachable bootstrap server.
+		subnet, err := detectLocalSubnetFromAny(f.bootstrap.addrs)
+		if err != nil {
+			return c.Errf("ecs auto-detection failed: %v", err)
+		}
+		f.bootstrap.setECS(subnet)
+	case 1:
+		_, subnet, err := net.ParseCIDR(args[0])
+		if err != nil {
+			return c.Errf("invalid CIDR for ecs: %v", err)
+		}
+		f.bootstrap.setECS(subnet)
+	default:
+		return c.Errf("ecs takes zero or one argument: ecs [CIDR]")
+	}
 	return nil
 }
 
