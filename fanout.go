@@ -22,7 +22,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"net"
 	"sync"
 	"time"
 
@@ -58,7 +57,7 @@ type Fanout struct {
 	loadFactor            []int
 	policyType            string
 	ServerSelectionPolicy policy
-	bootstrapResolver     *net.Resolver
+	bootstrap             *bootstrapConfig
 	TapPlugin             *dnstap.Dnstap
 	Next                  plugin.Handler
 }
