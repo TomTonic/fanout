@@ -25,6 +25,8 @@ import (
 	"github.com/pkg/errors"
 )
 
+var bootstrapQueryTypes = []uint16{dns.TypeA, dns.TypeAAAA}
+
 // bootstrapConfig holds the configuration for bootstrap DNS resolution.
 // It uses miekg/dns directly (instead of net.Resolver) to support EDNS0
 // Client Subnet (ECS, RFC 7871). When a bootstrap resolver is behind a
@@ -85,18 +87,36 @@ func (b *bootstrapConfig) setECS(subnet *net.IPNet) {
 // DNS servers. If ECS is configured, an EDNS0 Client Subnet option is
 // included so that authoritative servers return geographically optimal results.
 func (b *bootstrapConfig) lookup(ctx context.Context, host string) ([]string, error) {
-	for _, qtype := range []uint16{dns.TypeA, dns.TypeAAAA} {
+	var (
+		allIPs  []string
+		lastErr error
+	)
+	for _, qtype := range bootstrapQueryTypes {
 		ips, err := b.queryBootstrap(ctx, host, qtype)
-		if err == nil && len(ips) > 0 {
-			return ips, nil
+		if err != nil {
+			lastErr = err
+			continue
 		}
+		if len(ips) > 0 {
+			allIPs = append(allIPs, ips...)
+		}
+	}
+	if len(allIPs) > 0 {
+		return allIPs, nil
+	}
+	if lastErr != nil {
+		return nil, errors.Wrapf(lastErr, "bootstrap: no addresses found for %s", host)
 	}
 	return nil, errors.Errorf("bootstrap: no addresses found for %s", host)
 }
 
-// queryBootstrap sends a single DNS query to a randomly chosen bootstrap
-// server and extracts IP addresses from the answer section.
+// queryBootstrap sends a DNS query to the configured bootstrap resolvers in
+// randomized order and extracts IP addresses from the first successful answer.
 func (b *bootstrapConfig) queryBootstrap(ctx context.Context, host string, qtype uint16) ([]string, error) {
+	if len(b.addrs) == 0 {
+		return nil, errors.New("bootstrap: no resolvers configured")
+	}
+
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(host), qtype)
 	msg.RecursionDesired = true
@@ -108,50 +128,88 @@ func (b *bootstrapConfig) queryBootstrap(ctx context.Context, host string, qtype
 		}
 	}
 
-	addr := b.addrs[rand.IntN(len(b.addrs))] //nolint:gosec // not security-sensitive
 	client := &dns.Client{
 		Net:     "udp",
 		Timeout: dialTimeout,
 	}
 
-	resp, _, err := client.ExchangeContext(ctx, msg, addr)
-	if err != nil {
-		return nil, err
-	}
-	if resp.Rcode != dns.RcodeSuccess {
-		return nil, errors.Errorf("bootstrap query for %s (type %d) returned rcode %d", host, qtype, resp.Rcode)
+	var lastErr error
+	for _, addr := range b.shuffledAddrs() {
+		resp, _, err := client.ExchangeContext(ctx, msg, addr)
+		if err != nil {
+			lastErr = errors.Wrapf(err, "bootstrap query to %s failed", addr)
+			continue
+		}
+		if resp.Rcode != dns.RcodeSuccess {
+			lastErr = errors.Errorf("bootstrap query to %s for %s (type %d) returned rcode %d", addr, host, qtype, resp.Rcode)
+			continue
+		}
+
+		var ips []string
+		for _, rr := range resp.Answer {
+			switch v := rr.(type) {
+			case *dns.A:
+				ips = append(ips, v.A.String())
+			case *dns.AAAA:
+				ips = append(ips, v.AAAA.String())
+			}
+		}
+		return ips, nil
 	}
 
-	var ips []string
-	for _, rr := range resp.Answer {
-		switch v := rr.(type) {
-		case *dns.A:
-			ips = append(ips, v.A.String())
-		case *dns.AAAA:
-			ips = append(ips, v.AAAA.String())
-		}
+	if lastErr != nil {
+		return nil, lastErr
 	}
-	return ips, nil
+	return nil, errors.Errorf("bootstrap query for %s (type %d) returned no usable resolvers", host, qtype)
 }
 
-// resolveHost resolves the hostname portion of a host:port string.
+func (b *bootstrapConfig) shuffledAddrs() []string {
+	if len(b.addrs) <= 1 {
+		return append([]string(nil), b.addrs...)
+	}
+	perm := rand.Perm(len(b.addrs)) //nolint:gosec // not security-sensitive
+	addrs := make([]string, 0, len(b.addrs))
+	for _, idx := range perm {
+		addrs = append(addrs, b.addrs[idx])
+	}
+	return addrs
+}
+
+// resolveHostCandidates resolves the hostname portion of a host:port string.
 // If the host is already an IP address the input is returned unchanged.
-// On success the first resolved IP is returned joined with the original port,
-// and the bare hostname is returned separately so the caller can set the TLS
-// ServerName for certificate verification.
-func (b *bootstrapConfig) resolveHost(ctx context.Context, hostport string) (resolved, hostname string, err error) {
+// On success all resolved IPs are returned joined with the original port, and
+// the bare hostname is returned separately so the caller can set the TLS
+// ServerName for certificate verification while still retaining address fallback.
+func (b *bootstrapConfig) resolveHostCandidates(ctx context.Context, hostport string) (resolved []string, hostname string, err error) {
 	host, port, err := net.SplitHostPort(hostport)
 	if err != nil {
-		return hostport, "", nil
+		return []string{hostport}, "", nil
 	}
 	if net.ParseIP(host) != nil {
-		return hostport, "", nil
+		return []string{hostport}, "", nil
 	}
 	ips, err := b.lookup(ctx, host)
 	if err != nil {
-		return "", host, errors.Wrapf(err, "bootstrap resolution of %s failed", host)
+		return nil, host, errors.Wrapf(err, "bootstrap resolution of %s failed", host)
 	}
-	return net.JoinHostPort(ips[0], port), host, nil
+	resolved = make([]string, 0, len(ips))
+	for _, ip := range ips {
+		resolved = append(resolved, net.JoinHostPort(ip, port))
+	}
+	return resolved, host, nil
+}
+
+// resolveHost returns the first resolved candidate for callers that only need
+// one address. Prefer resolveHostCandidates for connection establishment.
+func (b *bootstrapConfig) resolveHost(ctx context.Context, hostport string) (resolved, hostname string, err error) {
+	resolvedAddrs, hostname, err := b.resolveHostCandidates(ctx, hostport)
+	if err != nil {
+		return "", hostname, err
+	}
+	if len(resolvedAddrs) == 0 {
+		return "", hostname, errors.Errorf("bootstrap: no addresses found for %s", hostport)
+	}
+	return resolvedAddrs[0], hostname, nil
 }
 
 // dialContext returns a function compatible with http.Transport.DialContext
@@ -160,13 +218,39 @@ func (b *bootstrapConfig) resolveHost(ctx context.Context, hostport string) (res
 // of the system resolver.
 func (b *bootstrapConfig) dialContext() func(ctx context.Context, network, address string) (net.Conn, error) {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
-		resolved, _, err := b.resolveHost(ctx, address)
+		resolvedAddrs, _, err := b.resolveHostCandidates(ctx, address)
 		if err != nil {
 			return nil, err
 		}
 		d := net.Dialer{Timeout: dialTimeout}
-		return d.DialContext(ctx, network, resolved)
+		var lastErr error
+		for _, resolved := range resolvedAddrs {
+			conn, err := d.DialContext(ctx, network, resolved)
+			if err == nil {
+				return conn, nil
+			}
+			lastErr = err
+		}
+		if lastErr != nil {
+			return nil, errors.Wrapf(lastErr, "bootstrap dial to %s failed", address)
+		}
+		return nil, errors.Errorf("bootstrap dial to %s failed: no addresses resolved", address)
 	}
+}
+
+func detectLocalSubnetFromAny(targetAddrs []string) (*net.IPNet, error) {
+	if len(targetAddrs) == 0 {
+		return nil, errors.New("no bootstrap resolvers configured")
+	}
+	var lastErr error
+	for _, addr := range targetAddrs {
+		subnet, err := detectLocalSubnet(addr)
+		if err == nil {
+			return subnet, nil
+		}
+		lastErr = errors.Wrapf(err, "detecting local subnet via %s", addr)
+	}
+	return nil, lastErr
 }
 
 // detectLocalSubnet determines the machine's outgoing IP address by making

@@ -370,6 +370,13 @@ func parseBootstrap(f *Fanout, c *caddyfile.Dispenser) error {
 		if _, _, err := net.SplitHostPort(a); err != nil {
 			a = net.JoinHostPort(a, "53")
 		}
+		host, _, err := net.SplitHostPort(a)
+		if err != nil {
+			return c.Errf("invalid bootstrap address %q: %v", a, err)
+		}
+		if net.ParseIP(host) == nil {
+			return c.Errf("bootstrap address must be an IP literal: %q", host)
+		}
 		addrs = append(addrs, a)
 	}
 	f.bootstrap = newBootstrapConfig(addrs)
@@ -383,8 +390,8 @@ func parseECS(f *Fanout, c *caddyfile.Dispenser) error {
 	args := c.RemainingArgs()
 	switch len(args) {
 	case 0:
-		// Auto-detect from outgoing IP toward the first bootstrap server.
-		subnet, err := detectLocalSubnet(f.bootstrap.addrs[0])
+		// Auto-detect from outgoing IP toward the first reachable bootstrap server.
+		subnet, err := detectLocalSubnetFromAny(f.bootstrap.addrs)
 		if err != nil {
 			return c.Errf("ecs auto-detection failed: %v", err)
 		}

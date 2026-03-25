@@ -76,6 +76,25 @@ func TestBootstrapLookupWithoutECS(t *testing.T) {
 	require.False(t, receivedECS.Load(), "ECS should not be sent when not configured")
 }
 
+// TestBootstrapLookupFallsBackAcrossResolvers verifies that bootstrap lookup
+// tries additional configured resolvers when the first one returns an error.
+// This keeps hostname resolution working when a subset of bootstrap resolvers
+// is degraded or misbehaving.
+func TestBootstrapLookupFallsBackAcrossResolvers(t *testing.T) {
+	badAddr := startTestDNSServer(t, dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
+		resp := new(dns.Msg)
+		resp.SetReply(r)
+		resp.Rcode = dns.RcodeServerFailure
+		_ = w.WriteMsg(resp)
+	}))
+	goodAddr := startTestDNSServer(t, newTestDNSRecordHandler(dns.TypeA, "198.51.100.9"))
+
+	b := newBootstrapConfig([]string{badAddr, goodAddr})
+	ips, err := b.lookup(context.Background(), "example.com")
+	require.NoError(t, err)
+	require.Equal(t, []string{"198.51.100.9"}, ips)
+}
+
 // TestBootstrapLookupWithECS verifies that when ECS is configured, the
 // bootstrap query includes an EDNS0 Client Subnet option with the correct
 // family, prefix length, and masked address. This allows distant bootstrap
@@ -228,6 +247,71 @@ func TestBootstrapResolveHostResolution(t *testing.T) {
 	}
 }
 
+// TestBootstrapResolveHostCandidatesIncludesMultipleFamilies verifies that
+// bootstrap resolution retains all returned address candidates so callers can
+// fall back across address families instead of pinning to a single record.
+func TestBootstrapResolveHostCandidatesIncludesMultipleFamilies(t *testing.T) {
+	addr := startTestDNSServer(t, dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
+		resp := new(dns.Msg)
+		resp.SetReply(r)
+		switch r.Question[0].Qtype {
+		case dns.TypeA:
+			resp.Answer = append(resp.Answer, &dns.A{
+				Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+				A:   net.ParseIP("10.0.0.1"),
+			})
+		case dns.TypeAAAA:
+			resp.Answer = append(resp.Answer, &dns.AAAA{
+				Hdr:  dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 60},
+				AAAA: net.ParseIP("2001:db8::1"),
+			})
+		}
+		_ = w.WriteMsg(resp)
+	}))
+
+	b := newBootstrapConfig([]string{addr})
+	resolved, hostname, err := b.resolveHostCandidates(context.Background(), "dns.example.com:443")
+	require.NoError(t, err)
+	require.Equal(t, "dns.example.com", hostname)
+	require.Equal(t, []string{"10.0.0.1:443", "[2001:db8::1]:443"}, resolved)
+}
+
+// TestBootstrapDialContextFallsBackToNextResolvedAddress verifies that the
+// HTTP/2 dial path tries later resolved addresses when the first candidate is
+// unreachable, preserving connectivity for multi-address upstreams.
+func TestBootstrapDialContextFallsBackToNextResolvedAddress(t *testing.T) {
+	tcpListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = tcpListener.Close() }()
+
+	_, tcpPort, _ := net.SplitHostPort(tcpListener.Addr().String())
+	dnsAddr := startTestDNSServer(t, dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
+		resp := new(dns.Msg)
+		resp.SetReply(r)
+		if r.Question[0].Qtype == dns.TypeA {
+			resp.Answer = append(resp.Answer,
+				&dns.A{Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60}, A: net.ParseIP("127.0.0.2")},
+				&dns.A{Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60}, A: net.ParseIP("127.0.0.1")},
+			)
+		}
+		_ = w.WriteMsg(resp)
+	}))
+
+	b := newBootstrapConfig([]string{dnsAddr})
+	dial := b.dialContext()
+
+	go func() {
+		conn, _ := tcpListener.Accept()
+		if conn != nil {
+			_ = conn.Close()
+		}
+	}()
+
+	conn, err := dial(context.Background(), "tcp", "fake.hostname.test:"+tcpPort)
+	require.NoError(t, err)
+	_ = conn.Close()
+}
+
 // TestBootstrapDialContext verifies that bootstrapConfig.dialContext() returns
 // a DialContext function that resolves hostnames through the bootstrap server
 // before establishing TCP connections. This is the mechanism used by the DoH
@@ -286,6 +370,19 @@ func TestParseBootstrap(t *testing.T) {
 	require.NotNil(t, f.bootstrap)
 	require.Equal(t, []string{"9.9.9.11:53", "149.112.112.11:5353"}, f.bootstrap.addrs)
 	require.Nil(t, f.bootstrap.ecs, "ECS should not be set without ecs directive")
+}
+
+// TestParseBootstrapRejectsHostnames verifies that bootstrap accepts only IP
+// literals so the configuration cannot silently fall back to the system
+// resolver and reintroduce recursive resolution loops.
+func TestParseBootstrapRejectsHostnames(t *testing.T) {
+	input := `fanout . 127.0.0.1:53 {
+		bootstrap dns.google
+	}`
+	c := caddy.NewTestController("dns", input)
+	_, err := parseFanout(c)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "IP literal")
 }
 
 // TestParseECSExplicitCIDR verifies that the "ecs" directive with an explicit
@@ -382,4 +479,12 @@ func TestDetectLocalSubnet(t *testing.T) {
 	} else {
 		require.Equal(t, 48, ones)
 	}
+}
+
+// TestDetectLocalSubnetFromAnyFallsBack verifies that ECS auto-detection tries
+// the next bootstrap resolver when an earlier address cannot be used.
+func TestDetectLocalSubnetFromAnyFallsBack(t *testing.T) {
+	subnet, err := detectLocalSubnetFromAny([]string{"invalid-address", "127.0.0.1:53"})
+	require.NoError(t, err)
+	require.NotNil(t, subnet)
 }

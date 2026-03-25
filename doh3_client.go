@@ -24,6 +24,7 @@ import (
 
 	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
+	"github.com/pkg/errors"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 )
@@ -91,7 +92,7 @@ func newDoH3ClientFull(endpoint string, tlsConfig *tls.Config, bootstrap *bootst
 // the QUIC connection. The original hostname is preserved as TLS ServerName.
 func bootstrapQUICDial(bootstrap *bootstrapConfig) func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
 	return func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
-		resolved, hostname, err := bootstrap.resolveHost(ctx, addr)
+		resolvedAddrs, hostname, err := bootstrap.resolveHostCandidates(ctx, addr)
 		if err != nil {
 			return nil, err
 		}
@@ -99,7 +100,18 @@ func bootstrapQUICDial(bootstrap *bootstrapConfig) func(ctx context.Context, add
 			tlsCfg = tlsCfg.Clone()
 			tlsCfg.ServerName = hostname
 		}
-		return quic.DialAddrEarly(ctx, resolved, tlsCfg, cfg)
+		var lastErr error
+		for _, resolved := range resolvedAddrs {
+			conn, err := quic.DialAddrEarly(ctx, resolved, tlsCfg, cfg)
+			if err == nil {
+				return conn, nil
+			}
+			lastErr = err
+		}
+		if lastErr != nil {
+			return nil, errors.Wrapf(lastErr, "bootstrap QUIC dial to %s failed", addr)
+		}
+		return nil, errors.Errorf("bootstrap QUIC dial to %s failed: no addresses resolved", addr)
 	}
 }
 
