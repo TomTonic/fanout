@@ -35,13 +35,14 @@ import (
 //
 //	fanout . https://dns.nextdns.io/abc123 {
 //	    bootstrap 9.9.9.11 149.112.112.11
-//	    bootstrap-ecs 203.0.113.0/24
+//	    ecs                          # auto-detect local subnet
+//	    # OR: ecs 203.0.113.0/24    # explicit subnet
 //	}
 //
 // Privacy note: ECS reveals part of the client's IP to the bootstrap
 // resolver and — transitively — to authoritative name servers. If that is
-// undesirable, omit the bootstrap-ecs directive; the bootstrap query will
-// then be a plain DNS lookup without subnet information.
+// undesirable, omit the ecs directive; the bootstrap query will then be a
+// plain DNS lookup without subnet information.
 //
 // Which bootstrap IPs support ECS?
 //
@@ -166,4 +167,30 @@ func (b *bootstrapConfig) dialContext() func(ctx context.Context, network, addre
 		d := net.Dialer{Timeout: dialTimeout}
 		return d.DialContext(ctx, network, resolved)
 	}
+}
+
+// detectLocalSubnet determines the machine's outgoing IP address by making
+// a connectionless UDP "dial" to targetAddr. The returned *net.IPNet uses a
+// /24 prefix for IPv4 and /48 for IPv6, which is the recommended granularity
+// for EDNS0 Client Subnet (see RFC 7871 §11.1).
+func detectLocalSubnet(targetAddr string) (*net.IPNet, error) {
+	conn, err := net.DialTimeout("udp", targetAddr, dialTimeout)
+	if err != nil {
+		return nil, errors.Wrap(err, "detecting local subnet")
+	}
+	defer func() { _ = conn.Close() }()
+
+	host, _, err := net.SplitHostPort(conn.LocalAddr().String())
+	if err != nil {
+		return nil, errors.Wrap(err, "parsing local address")
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return nil, errors.Errorf("invalid local IP %q", host)
+	}
+
+	if v4 := ip.To4(); v4 != nil {
+		return &net.IPNet{IP: v4.Mask(net.CIDRMask(24, 32)), Mask: net.CIDRMask(24, 32)}, nil
+	}
+	return &net.IPNet{IP: ip.Mask(net.CIDRMask(48, 128)), Mask: net.CIDRMask(48, 128)}, nil
 }
