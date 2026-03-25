@@ -122,11 +122,12 @@ fanout FROM TO... {
     | Cloudflare | `1.1.1.1`, `1.0.0.1`      | _(ECS generally not forwarded)_ |
 
   * **Why not for forwarded queries?** ECS on bootstrap queries only resolves the _upstream hostname_
-    (e.g. `dns.nextdns.io` → optimal anycast IP). For the actual forwarded DNS queries, connection-based
-    protocols (DoH, DoH3, DoQ) already convey the client's IP through the transport connection itself,
-    making wire-level ECS redundant and — in combination with the CoreDNS `cache` plugin —
-    potentially harmful: the cache keys on `(qname, qtype, qclass)` without considering ECS subnets,
-    so different clients could receive cached answers optimized for someone else's location.
+    (e.g. `dns.nextdns.io` → optimal anycast IP). For the actual forwarded DNS queries, the upstream sees
+    the IP of the fanout instance, not the original downstream client. Propagating per-client ECS through
+    this plugin would therefore require explicit client-subnet handling in the request path and — in
+    combination with the CoreDNS `cache` plugin — would still be potentially harmful: the cache keys on
+    `(qname, qtype, qclass)` without considering ECS subnets, so different clients could receive cached
+    answers optimized for someone else's location.
 * `debug` — emit per-upstream intermediate request failures through the `fanout` logger so defective upstream attempts remain visible even when another upstream still answers successfully. Expected local cancellations caused by fanout shutting down losing attempts are excluded from these warning lines.
 * `race` — gives priority to the first result, whether it is negative or not, as long as it is a valid DNS response.
 * `race-continue-on-error` — When enabled together with `race`, fanout does not early-return on erroneous DNS responses such as `SERVFAIL`, but still treats `NOERROR` and `NXDOMAIN` as terminal answers that can end the race immediately. The default is `false`.
