@@ -285,13 +285,13 @@ func TestParseBootstrap(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, f.bootstrap)
 	require.Equal(t, []string{"9.9.9.11:53", "149.112.112.11:5353"}, f.bootstrap.addrs)
-	require.Nil(t, f.bootstrap.ecs, "ECS should not be set without bootstrap-ecs")
+	require.Nil(t, f.bootstrap.ecs, "ECS should not be set without ecs directive")
 }
 
-// TestParseBootstrapECS verifies that the Corefile "bootstrap-ecs" directive
-// enables EDNS0 Client Subnet on a previously configured bootstrapConfig.
+// TestParseECSExplicitCIDR verifies that the "ecs" directive with an explicit
+// CIDR argument enables EDNS0 Client Subnet on the bootstrapConfig.
 // Checks family, prefix length, and address encoding for both IPv4 and IPv6.
-func TestParseBootstrapECS(t *testing.T) {
+func TestParseECSExplicitCIDR(t *testing.T) {
 	tests := []struct {
 		name           string
 		cidr           string
@@ -308,7 +308,7 @@ func TestParseBootstrapECS(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			input := `fanout . 127.0.0.1:53 {
 				bootstrap 9.9.9.11
-				bootstrap-ecs ` + tt.cidr + `
+				ecs ` + tt.cidr + `
 			}`
 			c := caddy.NewTestController("dns", input)
 			f, err := parseFanout(c)
@@ -322,12 +322,12 @@ func TestParseBootstrapECS(t *testing.T) {
 	}
 }
 
-// TestParseBootstrapECSWithoutBootstrap verifies that specifying bootstrap-ecs
-// without a prior bootstrap directive results in a parse error, since ECS
-// without a bootstrap resolver to send it to is meaningless.
-func TestParseBootstrapECSWithoutBootstrap(t *testing.T) {
+// TestParseECSWithoutBootstrap verifies that specifying ecs without a prior
+// bootstrap directive results in a parse error, since ECS without a bootstrap
+// resolver to send it to is meaningless.
+func TestParseECSWithoutBootstrap(t *testing.T) {
 	input := `fanout . 127.0.0.1:53 {
-		bootstrap-ecs 203.0.113.0/24
+		ecs 203.0.113.0/24
 	}`
 	c := caddy.NewTestController("dns", input)
 	_, err := parseFanout(c)
@@ -336,16 +336,50 @@ func TestParseBootstrapECSWithoutBootstrap(t *testing.T) {
 		"error should mention bootstrap dependency, got: %s", err.Error())
 }
 
-// TestParseBootstrapECSInvalidCIDR verifies that an invalid CIDR notation in
-// bootstrap-ecs results in a clear parse error.
-func TestParseBootstrapECSInvalidCIDR(t *testing.T) {
+// TestParseECSInvalidCIDR verifies that an invalid CIDR notation in the ecs
+// directive results in a clear parse error.
+func TestParseECSInvalidCIDR(t *testing.T) {
 	input := `fanout . 127.0.0.1:53 {
 		bootstrap 9.9.9.11
-		bootstrap-ecs not-a-cidr
+		ecs not-a-cidr
 	}`
 	c := caddy.NewTestController("dns", input)
 	_, err := parseFanout(c)
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "CIDR"),
 		"error should mention CIDR, got: %s", err.Error())
+}
+
+// TestParseECSAutoDetect verifies that "ecs" without arguments auto-detects
+// the local subnet by dialing UDP to a bootstrap server. On any machine with
+// a network stack, this should produce a valid /24 (IPv4) or /48 (IPv6)
+// subnet without error.
+func TestParseECSAutoDetect(t *testing.T) {
+	input := `fanout . 127.0.0.1:53 {
+		bootstrap 127.0.0.1
+		ecs
+	}`
+	c := caddy.NewTestController("dns", input)
+	f, err := parseFanout(c)
+	require.NoError(t, err)
+	require.NotNil(t, f.bootstrap)
+	require.NotNil(t, f.bootstrap.ecs, "auto-detected ECS should be set")
+	// On localhost, the detected IP is 127.0.0.1 → /24 → family 1.
+	require.Equal(t, uint16(1), f.bootstrap.ecs.Family)
+	require.Equal(t, uint8(24), f.bootstrap.ecs.SourceNetmask)
+}
+
+// TestDetectLocalSubnet verifies that detectLocalSubnet returns a valid /24
+// IPv4 subnet when dialing to localhost. This exercises the UDP-dial approach
+// for determining the outgoing IP without sending any packets.
+func TestDetectLocalSubnet(t *testing.T) {
+	subnet, err := detectLocalSubnet("127.0.0.1:53")
+	require.NoError(t, err)
+	require.NotNil(t, subnet)
+	ones, bits := subnet.Mask.Size()
+	if bits == 32 {
+		require.Equal(t, 24, ones)
+	} else {
+		require.Equal(t, 48, ones)
+	}
 }

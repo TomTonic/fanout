@@ -277,7 +277,7 @@ var parseRegistry = map[string]func(*Fanout, *caddyfile.Dispenser) error{
 	"race-continue-on-error":          parseRaceContinueOnError,
 	"race-continue-on-error-response": parseRaceContinueOnError,
 	"bootstrap":                       parseBootstrap,
-	"bootstrap-ecs":                   parseBootstrapECS,
+	"ecs":                             parseECS,
 	"except":                          parseIgnored,
 	"except-file":                     parseIgnoredFromFile,
 	"attempt-count":                   parseAttemptCount,
@@ -376,19 +376,28 @@ func parseBootstrap(f *Fanout, c *caddyfile.Dispenser) error {
 	return nil
 }
 
-func parseBootstrapECS(f *Fanout, c *caddyfile.Dispenser) error {
-	args := c.RemainingArgs()
-	if len(args) != 1 {
-		return c.Errf("bootstrap-ecs requires exactly one CIDR argument (e.g. 203.0.113.0/24)")
-	}
+func parseECS(f *Fanout, c *caddyfile.Dispenser) error {
 	if f.bootstrap == nil {
-		return c.Errf("bootstrap-ecs requires a prior bootstrap directive")
+		return c.Errf("ecs requires a prior bootstrap directive")
 	}
-	_, subnet, err := net.ParseCIDR(args[0])
-	if err != nil {
-		return c.Errf("invalid CIDR for bootstrap-ecs: %v", err)
+	args := c.RemainingArgs()
+	switch len(args) {
+	case 0:
+		// Auto-detect from outgoing IP toward the first bootstrap server.
+		subnet, err := detectLocalSubnet(f.bootstrap.addrs[0])
+		if err != nil {
+			return c.Errf("ecs auto-detection failed: %v", err)
+		}
+		f.bootstrap.setECS(subnet)
+	case 1:
+		_, subnet, err := net.ParseCIDR(args[0])
+		if err != nil {
+			return c.Errf("invalid CIDR for ecs: %v", err)
+		}
+		f.bootstrap.setECS(subnet)
+	default:
+		return c.Errf("ecs takes zero or one argument: ecs [CIDR]")
 	}
-	f.bootstrap.setECS(subnet)
 	return nil
 }
 

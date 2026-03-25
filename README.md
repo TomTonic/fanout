@@ -60,6 +60,8 @@ fanout FROM TO... {
     except-file FILE
     attempt-count COUNT
     timeout DURATION
+    bootstrap IP...
+    ecs [CIDR]
     debug
     race
     race-continue-on-error
@@ -89,6 +91,42 @@ fanout FROM TO... {
 * `except-file` — path to a file with line-separated domains to exclude from proxying.
 * `attempt-count` — the number of failed attempts before considering an upstream to be down. If `0`, the upstream will never be marked as down and the request will run until `timeout`. Default is `3`.
 * `timeout` — the maximum time for the entire request. Default is `30s`.
+* `bootstrap` **IP...** — one or more IP addresses (with optional `:port`, default port 53) of plain-DNS
+  servers used to resolve hostnames in upstream URLs. This is required when DoH, DoH3, or DoQ upstreams
+  use hostname-based endpoints (e.g. `dns.nextdns.io`) and the system's default DNS resolver
+  might point back at this very CoreDNS instance, creating a circular dependency. The bootstrap
+  resolver sends plain-UDP DNS queries to the specified IPs, bypassing the system resolver entirely.
+  Only the _hostname resolution_ of upstream endpoints uses the bootstrap servers; regular client
+  queries still go through the configured upstreams.
+* `ecs` [**CIDR**] — enable EDNS0 Client Subnet ([RFC 7871](https://datatracker.ietf.org/doc/html/rfc7871))
+  on bootstrap DNS queries. Requires a prior `bootstrap` directive.
+  * Without argument (`ecs`): the local outgoing IP is auto-detected and sent as a /24 (IPv4) or
+    /48 (IPv6) prefix. This is the recommended default — it works on laptops, hotel Wi-Fi,
+    and dynamically assigned addresses without manual configuration.
+  * With argument (`ecs 203.0.113.0/24`): the given CIDR is used verbatim.
+  * **When to use:** When the bootstrap resolvers are not on your local network. Without ECS,
+    a distant bootstrap resolver (e.g. `9.9.9.11` in Frankfurt) asks the authoritative server
+    for `dns.nextdns.io` and receives the IP closest to _Frankfurt_, not to you. With ECS
+    enabled, your subnet is forwarded so the authoritative server returns the endpoint closest
+    to _you_.
+  * **Privacy note:** ECS reveals a prefix of your IP to the bootstrap resolver and, transitively,
+    to authoritative name servers. If this is undesirable, simply omit `ecs` — the bootstrap query
+    will then be a plain DNS lookup without subnet information.
+  * **Which bootstrap IPs support ECS?** Not all resolvers forward ECS to authoritative servers.
+    You must use an ECS-enabled resolver for this feature to have any effect:
+
+    | Provider   | Standard (no ECS)          | ECS-enabled                  |
+    |------------|----------------------------|------------------------------|
+    | Quad9      | `9.9.9.9`, `149.112.112.112` | **`9.9.9.11`**, `149.112.112.11` |
+    | Google     | —                          | `8.8.8.8`, `8.8.4.4`        |
+    | Cloudflare | `1.1.1.1`, `1.0.0.1`      | _(ECS generally not forwarded)_ |
+
+  * **Why not for forwarded queries?** ECS on bootstrap queries only resolves the _upstream hostname_
+    (e.g. `dns.nextdns.io` → optimal anycast IP). For the actual forwarded DNS queries, connection-based
+    protocols (DoH, DoH3, DoQ) already convey the client's IP through the transport connection itself,
+    making wire-level ECS redundant and — in combination with the CoreDNS `cache` plugin —
+    potentially harmful: the cache keys on `(qname, qtype, qclass)` without considering ECS subnets,
+    so different clients could receive cached answers optimized for someone else's location.
 * `debug` — emit per-upstream intermediate request failures through the `fanout` logger so defective upstream attempts remain visible even when another upstream still answers successfully. Expected local cancellations caused by fanout shutting down losing attempts are excluded from these warning lines.
 * `race` — gives priority to the first result, whether it is negative or not, as long as it is a valid DNS response.
 * `race-continue-on-error` — When enabled together with `race`, fanout does not early-return on erroneous DNS responses such as `SERVFAIL`, but still treats `NOERROR` and `NXDOMAIN` as terminal answers that can end the race immediately. The default is `false`.
@@ -205,6 +243,53 @@ The first successful response from any transport wins.
 ~~~ corefile
 . {
     fanout . 1.1.1.1 https://cloudflare-dns.com/dns-query h3://cloudflare-dns.com/dns-query quic://dns.adguard-dns.com:853
+}
+~~~
+
+### Bootstrap Resolver
+
+When running inside a container whose system DNS points back at CoreDNS itself,
+hostname-based upstreams like `dns.nextdns.io` cannot be resolved. The `bootstrap`
+directive breaks this circular dependency by resolving upstream hostnames through
+the specified plain-DNS servers.
+
+~~~ corefile
+. {
+    fanout . https://dns.nextdns.io/abc123 h3://dns.nextdns.io/abc123 quic://DoQ-abc123.dns.nextdns.io:853 {
+        bootstrap 9.9.9.11 149.112.112.11
+    }
+}
+~~~
+
+### Bootstrap with ECS (Auto-Detect)
+
+When the bootstrap resolvers are in a different geographic region, EDNS0 Client
+Subnet ensures the authoritative server returns the upstream's anycast endpoint
+closest to you — not to the bootstrap resolver. With `ecs` (no argument), the
+local IP is auto-detected.
+
+~~~ corefile
+. {
+    fanout . https://dns.nextdns.io/abc123 h3://dns.nextdns.io/abc123 quic://DoQ-abc123.dns.nextdns.io:853 {
+        bootstrap 9.9.9.11 149.112.112.11
+        ecs
+        race
+        race-continue-on-error
+    }
+}
+~~~
+
+### Bootstrap with Explicit ECS Subnet
+
+If you need precise control over which subnet is announced (e.g. in a data centre
+with fixed IP ranges), pass a CIDR explicitly.
+
+~~~ corefile
+. {
+    fanout . https://dns.nextdns.io/abc123 {
+        bootstrap 8.8.8.8
+        ecs 203.0.113.0/24
+    }
 }
 ~~~
 
