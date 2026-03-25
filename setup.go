@@ -205,7 +205,7 @@ func initClients(f *Fanout, hosts []string) {
 // to the fanout's client list. Each URL must be a full HTTPS endpoint (e.g. "https://dns.google/dns-query").
 func initDoHClients(f *Fanout, urls []string) {
 	for _, u := range urls {
-		c := NewDoHClient(u)
+		c := newDoHClientFull(u, nil, f.bootstrapResolver)
 		if f.tlsConfig != nil && f.tlsConfig.ServerName != "" {
 			c.SetTLSConfig(f.tlsConfig)
 		}
@@ -217,7 +217,7 @@ func initDoHClients(f *Fanout, urls []string) {
 // URLs and appends them to the fanout's client list.
 func initDoH3Clients(f *Fanout, urls []string) {
 	for _, u := range urls {
-		c := NewDoH3Client(u)
+		c := newDoH3ClientFull(u, nil, f.bootstrapResolver)
 		if f.tlsConfig != nil && f.tlsConfig.ServerName != "" {
 			c.SetTLSConfig(f.tlsConfig)
 		}
@@ -229,7 +229,7 @@ func initDoH3Clients(f *Fanout, urls []string) {
 // and appends them to the fanout's client list.
 func initDoQClients(f *Fanout, addrs []string) {
 	for _, a := range addrs {
-		c := NewDoQClient(a)
+		c := newDoQClientFull(a, nil, f.bootstrapResolver)
 		if f.tlsConfig != nil && f.tlsConfig.ServerName != "" {
 			c.SetTLSConfig(f.tlsConfig)
 		}
@@ -288,6 +288,8 @@ func parseValue(v string, f *Fanout, c *caddyfile.Dispenser) error {
 		return parseRace(f, c)
 	case "race-continue-on-error", "race-continue-on-error-response":
 		return parseRaceContinueOnError(f, c)
+	case "bootstrap":
+		return parseBootstrap(f, c)
 	case "except":
 		return parseIgnored(f, c)
 	case "except-file":
@@ -355,6 +357,22 @@ func parseRaceContinueOnError(f *Fanout, c *caddyfile.Dispenser) error {
 		return c.ArgErr()
 	}
 	f.RaceContinueOnErrorResponse = true
+	return nil
+}
+
+func parseBootstrap(f *Fanout, c *caddyfile.Dispenser) error {
+	args := c.RemainingArgs()
+	if len(args) == 0 {
+		return c.ArgErr()
+	}
+	addrs := make([]string, 0, len(args))
+	for _, a := range args {
+		if _, _, err := net.SplitHostPort(a); err != nil {
+			a = net.JoinHostPort(a, "53")
+		}
+		addrs = append(addrs, a)
+	}
+	f.bootstrapResolver = newBootstrapResolver(addrs)
 	return nil
 }
 
