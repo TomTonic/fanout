@@ -44,8 +44,9 @@ const doqInternalError quic.ApplicationErrorCode = 0x1
 // It uses one QUIC stream per query on a persistent connection, providing
 // low-latency DNS resolution with TLS 1.3 encryption and multiplexing.
 type doqClient struct {
-	addr      string     // host:port of the DoQ server
-	mu        sync.Mutex // protects conn and tlsConfig
+	addr      string           // host:port of the DoQ server
+	bootstrap *bootstrapConfig // bootstrap config for hostname resolution (nil = system default)
+	mu        sync.Mutex       // protects conn and tlsConfig
 	conn      *quic.Conn
 	tlsConfig *tls.Config
 }
@@ -53,11 +54,18 @@ type doqClient struct {
 // NewDoQClient creates a new DNS-over-QUIC client for the given address.
 // The address should be in host:port format (e.g. "dns.example.com:853").
 func NewDoQClient(addr string) Client {
-	return newDoQClientWithTLS(addr, nil)
+	return newDoQClientFull(addr, nil, nil)
 }
 
 // newDoQClientWithTLS creates a DoQ client with an optional TLS configuration override.
 func newDoQClientWithTLS(addr string, tlsConfig *tls.Config) Client {
+	return newDoQClientFull(addr, tlsConfig, nil)
+}
+
+// newDoQClientFull creates a DoQ client with optional TLS override and bootstrap resolver.
+// When a bootstrap resolver is provided, hostname resolution for the server
+// address uses that resolver instead of the system default.
+func newDoQClientFull(addr string, tlsConfig *tls.Config, bootstrap *bootstrapConfig) Client {
 	if tlsConfig == nil {
 		tlsConfig = &tls.Config{
 			MinVersion: tls.VersionTLS13,
@@ -72,6 +80,7 @@ func newDoQClientWithTLS(addr string, tlsConfig *tls.Config) Client {
 
 	return &doqClient{
 		addr:      addr,
+		bootstrap: bootstrap,
 		tlsConfig: tlsConfig,
 	}
 }
@@ -275,8 +284,35 @@ func (c *doqClient) getOrDialConn(ctx context.Context) (*quic.Conn, error) {
 	}
 
 	tlsCfg := c.tlsConfig.Clone()
+	dialAddr := c.addr
 
-	conn, err := quic.DialAddr(ctx, c.addr, tlsCfg, &quic.Config{
+	if c.bootstrap != nil {
+		resolvedAddrs, hostname, err := c.bootstrap.resolveHostCandidates(ctx, c.addr)
+		if err != nil {
+			return nil, err
+		}
+		if hostname != "" && tlsCfg.ServerName == "" {
+			tlsCfg.ServerName = hostname
+		}
+		var lastErr error
+		for _, resolved := range resolvedAddrs {
+			conn, err := quic.DialAddr(ctx, resolved, tlsCfg, &quic.Config{
+				MaxIdleTimeout:  30 * time.Second,
+				KeepAlivePeriod: 15 * time.Second,
+			})
+			if err == nil {
+				c.conn = conn
+				return conn, nil
+			}
+			lastErr = err
+		}
+		if lastErr != nil {
+			return nil, errors.Wrapf(lastErr, "bootstrap QUIC dial to %s failed", c.addr)
+		}
+		return nil, errors.Errorf("bootstrap QUIC dial to %s failed: no addresses resolved", c.addr)
+	}
+
+	conn, err := quic.DialAddr(ctx, dialAddr, tlsCfg, &quic.Config{
 		MaxIdleTimeout:  30 * time.Second,
 		KeepAlivePeriod: 15 * time.Second,
 	})
