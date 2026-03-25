@@ -287,14 +287,29 @@ func (c *doqClient) getOrDialConn(ctx context.Context) (*quic.Conn, error) {
 	dialAddr := c.addr
 
 	if c.bootstrap != nil {
-		resolved, hostname, err := c.bootstrap.resolveHost(ctx, c.addr)
+		resolvedAddrs, hostname, err := c.bootstrap.resolveHostCandidates(ctx, c.addr)
 		if err != nil {
 			return nil, err
 		}
-		dialAddr = resolved
 		if hostname != "" && tlsCfg.ServerName == "" {
 			tlsCfg.ServerName = hostname
 		}
+		var lastErr error
+		for _, resolved := range resolvedAddrs {
+			conn, err := quic.DialAddr(ctx, resolved, tlsCfg, &quic.Config{
+				MaxIdleTimeout:  30 * time.Second,
+				KeepAlivePeriod: 15 * time.Second,
+			})
+			if err == nil {
+				c.conn = conn
+				return conn, nil
+			}
+			lastErr = err
+		}
+		if lastErr != nil {
+			return nil, errors.Wrapf(lastErr, "bootstrap QUIC dial to %s failed", c.addr)
+		}
+		return nil, errors.Errorf("bootstrap QUIC dial to %s failed: no addresses resolved", c.addr)
 	}
 
 	conn, err := quic.DialAddr(ctx, dialAddr, tlsCfg, &quic.Config{
