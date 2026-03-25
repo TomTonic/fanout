@@ -41,9 +41,10 @@ const dohContentType = "application/dns-message"
 // dohClient implements the Client interface for DNS-over-HTTPS (RFC 8484).
 // It uses HTTP POST with the application/dns-message content type.
 type dohClient struct {
-	endpoint   string     // full URL, e.g. "https://dns.google/dns-query"
-	netType    string     // DOH or DOH3
-	mu         sync.Mutex // protects httpClient during SetTLSConfig
+	endpoint   string        // full URL, e.g. "https://dns.google/dns-query"
+	netType    string        // DOH or DOH3
+	resolver   *net.Resolver // bootstrap resolver for hostname resolution (nil = system default)
+	mu         sync.Mutex    // protects httpClient during SetTLSConfig
 	httpClient *http.Client
 }
 
@@ -51,21 +52,34 @@ type dohClient struct {
 // The endpoint must be a full URL (e.g. "https://dns.google/dns-query").
 // The client uses HTTP/2 with a connection-pooling transport for performance.
 func NewDoHClient(endpoint string) Client {
-	return newDoHClientWithTLS(endpoint, nil)
+	return newDoHClientFull(endpoint, nil, nil)
 }
 
 // newDoHClientWithTLS creates a DoH client with an optional TLS configuration override.
 func newDoHClientWithTLS(endpoint string, tlsConfig *tls.Config) Client {
+	return newDoHClientFull(endpoint, tlsConfig, nil)
+}
+
+// newDoHClientFull creates a DoH client with optional TLS override and bootstrap resolver.
+func newDoHClientFull(endpoint string, tlsConfig *tls.Config, resolver *net.Resolver) Client {
 	return &dohClient{
 		endpoint:   endpoint,
 		netType:    DOH,
-		httpClient: newHTTP2Client(tlsConfig),
+		resolver:   resolver,
+		httpClient: newHTTP2ClientWithResolver(tlsConfig, resolver),
 	}
 }
 
 // newHTTP2Client creates an http.Client backed by an HTTP/2-capable transport.
 // The TLS config is cloned defensively to prevent external mutation.
 func newHTTP2Client(tlsConfig *tls.Config) *http.Client {
+	return newHTTP2ClientWithResolver(tlsConfig, nil)
+}
+
+// newHTTP2ClientWithResolver creates an http.Client backed by an HTTP/2-capable transport.
+// If resolver is non-nil it is used for hostname lookups, breaking circular
+// dependencies when the system default resolver points at this DNS service.
+func newHTTP2ClientWithResolver(tlsConfig *tls.Config, resolver *net.Resolver) *http.Client {
 	if tlsConfig == nil {
 		tlsConfig = &tls.Config{
 			MinVersion: tls.VersionTLS12,
@@ -80,7 +94,8 @@ func newHTTP2Client(tlsConfig *tls.Config) *http.Client {
 		MaxIdleConnsPerHost: connPoolSize,
 		IdleConnTimeout:     90 * time.Second,
 		DialContext: (&net.Dialer{
-			Timeout: dialTimeout,
+			Timeout:  dialTimeout,
+			Resolver: resolver,
 		}).DialContext,
 	}
 	return &http.Client{
@@ -98,7 +113,7 @@ func (c *dohClient) SetTLSConfig(cfg *tls.Config) {
 	}
 	cfg.MinVersion = tls.VersionTLS12
 
-	newClient := newHTTP2Client(cfg)
+	newClient := newHTTP2ClientWithResolver(cfg, c.resolver)
 
 	c.mu.Lock()
 	old := c.httpClient
