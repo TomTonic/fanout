@@ -23,6 +23,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +44,54 @@ func init() {
 		ServerType: "dns",
 		Action:     setup,
 	})
+}
+
+type buildInfo struct {
+	version  string
+	revision string
+	time     string
+	modified bool
+}
+
+func readBuildInfo() buildInfo {
+	bi := buildInfo{version: "(devel)"}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		bi.version = "(unknown)"
+		return bi
+	}
+	if info.Main.Version != "" && info.Main.Version != "(devel)" {
+		bi.version = info.Main.Version
+	}
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			bi.revision = s.Value
+		case "vcs.time":
+			bi.time = s.Value
+		case "vcs.modified":
+			bi.modified = s.Value == "true"
+		}
+	}
+	return bi
+}
+
+func (b buildInfo) String() string {
+	parts := []string{b.version}
+	if b.revision != "" {
+		rev := b.revision
+		if len(rev) > 12 {
+			rev = rev[:12]
+		}
+		parts = append(parts, "rev "+rev)
+	}
+	if b.time != "" {
+		parts = append(parts, b.time)
+	}
+	if b.modified {
+		parts = append(parts, "dirty")
+	}
+	return strings.Join(parts, " ")
 }
 
 func setup(c *caddy.Controller) error {
@@ -66,6 +115,7 @@ func setup(c *caddy.Controller) error {
 				f.TapPlugin = tapPlugin
 			}
 		}
+		log.Infof("fanout %s", readBuildInfo())
 		return f.OnStartup()
 	})
 	c.OnShutdown(f.OnShutdown)
