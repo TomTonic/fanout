@@ -17,8 +17,10 @@
 package fanout
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	stdlog "log"
 	"reflect"
 	"strings"
 	"testing"
@@ -117,6 +119,34 @@ func TestSetup_OnStartupBindsDnstapPluginFromRegistry(t *testing.T) {
 	}
 
 	require.Same(t, tapPlugin, f.TapPlugin)
+}
+
+// TestSetup_OnStartupLogsBuildInfo verifies that running the CoreDNS startup hooks emits the
+// plugin build metadata via the standard CoreDNS plugin logger so it appears in the server log.
+func TestSetup_OnStartupLogsBuildInfo(t *testing.T) {
+	c := caddy.NewTestController("dns", "fanout . 127.0.0.1")
+	require.NoError(t, setup(c))
+
+	var buf bytes.Buffer
+	oldWriter := stdlog.Writer()
+	oldFlags := stdlog.Flags()
+	oldPrefix := stdlog.Prefix()
+	stdlog.SetOutput(&buf)
+	stdlog.SetFlags(0)
+	stdlog.SetPrefix("")
+	defer func() {
+		stdlog.SetOutput(oldWriter)
+		stdlog.SetFlags(oldFlags)
+		stdlog.SetPrefix(oldPrefix)
+	}()
+
+	inst := controllerInstance(t, c)
+	require.NotEmpty(t, inst.OnStartup)
+	for _, startupFn := range inst.OnStartup {
+		require.NoError(t, startupFn())
+	}
+
+	require.Contains(t, buf.String(), "plugin/fanout: fanout "+readBuildInfo().String())
 }
 
 // TestSetup_ReturnsErrorWhenTooManyUpstreams verifies that during plugin registration,
