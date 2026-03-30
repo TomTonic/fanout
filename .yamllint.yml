@@ -1,13 +1,12 @@
 ---
 extends: default
 
-yaml-files:
-  - '*.yaml'
-  - '*.yml'
-
 rules:
-  truthy: disable
-  # 80 chars should be enough, but don't fail if a line is longer
   line-length: disable
-  comments-indentation:
-    ignore: .circleci/config.yml
+  document-start:
+    present: true
+  truthy:
+    allowed-values: ['true', 'false', 'on', 'off']
+  comments:
+    min-spaces-from-content: 1
+  comments-indentation: disable
