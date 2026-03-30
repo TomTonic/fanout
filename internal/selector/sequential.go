@@ -23,7 +23,10 @@ type Sequential[T any] struct {
 	idx    int
 }
 
-// NewSequentialSelector initializes a Sequential selector with default starting index 0.
+// NewSequentialSelector builds a selector that returns values in order.
+//
+// The selector keeps the original slice and advances an internal index on each
+// Pick call until all entries have been exhausted.
 func NewSequentialSelector[T any](values []T) *Sequential[T] {
 	return &Sequential[T]{
 		values: values,

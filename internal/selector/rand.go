@@ -30,7 +30,11 @@ type WeightedRand[T any] struct {
 	totalWeight int
 }
 
-// NewWeightedRandSelector initializes a WeightedRand by copying source values and calculating total weight.
+// NewWeightedRandSelector builds a destructive weighted selector over values.
+//
+// The values and weights slices are copied so callers can safely reuse or
+// modify their inputs after the call. Each Pick removes the chosen entry from
+// future draws, which matches fanout's per-request weighted selection model.
 func NewWeightedRandSelector[T any](values []T, weights []int) *WeightedRand[T] {
 	wrs := &WeightedRand[T]{
 		values:      make([]T, len(values)),

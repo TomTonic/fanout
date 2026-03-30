@@ -1,5 +1,3 @@
-<!-- TODO: Customize this file for your project. -->
-
 # Copilot Instructions
 
 This is a Go project using Go modules.
@@ -7,9 +5,10 @@ This is a Go project using Go modules.
 ## Code conventions
 
 - Follow standard Go conventions (gofmt, go vet)
-- Use golangci-lint with the project's `.golangci.yml`
+- Use golangci-lint with the project's `.golangci.yaml`
 - Prefer returning errors over panicking
-- Use `fmt.Errorf("context: %w", err)` for error wrapping
+- Use the repository-standard error helpers from `github.com/pkg/errors`
+	(`errors.Wrap`, `errors.Wrapf`, `errors.Errorf`). CI rejects `fmt.Errorf`.
 - Keep functions focused and under 60 lines
 
 ## Testing

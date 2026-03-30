@@ -28,7 +28,9 @@ type clientSelector interface {
 	Pick() Client
 }
 
-// SequentialPolicy is used to select clients based on its sequential order
+// SequentialPolicy selects upstream clients in the order they were configured.
+// Use it when deterministic first-to-last probing is preferred over randomized
+// selection.
 type SequentialPolicy struct {
 }
 
@@ -37,7 +39,9 @@ func (p *SequentialPolicy) selector(clients []Client) clientSelector {
 	return selector.NewSequentialSelector(clients)
 }
 
-// WeightedPolicy is used to select clients randomly based on its loadFactor (weights)
+// WeightedPolicy selects upstream clients randomly according to loadFactor.
+// The loadFactor slice must contain one weight per configured client in the
+// same order as the upstream list.
 type WeightedPolicy struct {
 	loadFactor []int
 }
