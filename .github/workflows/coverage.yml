@@ -1,0 +1,72 @@
+---
+# Test coverage with gist-based badge (no dead branch needed).
+#
+# Prerequisites:
+#   1. Create a GitHub Gist with any initial file at https://gist.github.com
+#   2. Create a PAT with 'gist' scope
+#   3. Add secret  GIST_TOKEN          = the PAT
+#   4. Add variable COVERAGE_GIST_ID   = the gist ID
+#
+# Badge markdown for your README:
+#   [![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/<USER>/<GIST_ID>/raw/<REPO>-coverage.json)](https://gist.github.com/<USER>/<GIST_ID>)
+
+name: Test Coverage
+
+on: [push]
+
+permissions:
+  contents: read
+
+# TODO: Adjust the threshold to your project's needs.
+env:
+  COVERAGE_THRESHOLD: 80
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+
+      - name: Run tests with coverage
+        run: go test ./... -coverprofile=cover.out -covermode=atomic
+
+      - name: Extract coverage percentage
+        id: cov
+        run: |
+          COVERAGE=$(go tool cover -func=cover.out | grep '^total:' | awk '{print $3}' | sed 's/%//')
+          echo "coverage=${COVERAGE}" >> "$GITHUB_OUTPUT"
+          echo "Coverage: ${COVERAGE}%"
+
+      - name: Check coverage threshold
+        run: |
+          COVERAGE_INT=${COVERAGE%%.*}
+          if [ "${COVERAGE_INT}" -lt "${COVERAGE_THRESHOLD}" ]; then
+            echo "::error::Coverage ${COVERAGE}% is below threshold ${COVERAGE_THRESHOLD}%"
+            exit 1
+          fi
+        env:
+          COVERAGE: ${{ steps.cov.outputs.coverage }}
+
+      - name: Update coverage badge
+        if: github.ref == 'refs/heads/main' && vars.COVERAGE_GIST_ID != ''
+        uses: schneegans/dynamic-badges-action@e9a478b16159b4d31420099ba146cdc50f134483 # v1.7.0
+        with:
+          auth: ${{ secrets.GIST_TOKEN }}
+          gistID: ${{ vars.COVERAGE_GIST_ID }}
+          filename: ${{ github.event.repository.name }}-coverage.json
+          label: coverage
+          message: "${{ steps.cov.outputs.coverage }}%"
+          valColorRange: ${{ steps.cov.outputs.coverage }}
+          minColorRange: 50
+          maxColorRange: 90
