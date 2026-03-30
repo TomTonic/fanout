@@ -320,6 +320,11 @@ func TestDoHClientEndpointAndNet(t *testing.T) {
 // configuration without panicking.
 func TestDoHClientSetTLSConfig(t *testing.T) {
 	c := NewDoHClient("https://dns.google/dns-query")
+	defer func() {
+		dc, ok := c.(*dohClient)
+		require.True(t, ok)
+		require.NoError(t, dc.Close())
+	}()
 
 	// Should not panic with nil.
 	c.SetTLSConfig(nil)
@@ -331,6 +336,30 @@ func TestDoHClientSetTLSConfig(t *testing.T) {
 		ServerName: "dns.google",
 	})
 	require.Equal(t, DOH, c.Net())
+}
+
+// TestDoHClientSetTLSConfigPreservesCallerTLSFloor verifies that DoH clients
+// enforce TLS 1.2 as a minimum without weakening a stricter caller-supplied
+// MinVersion or mutating the caller's tls.Config.
+func TestDoHClientSetTLSConfigPreservesCallerTLSFloor(t *testing.T) {
+	c := NewDoHClient("https://dns.google/dns-query")
+	dc, ok := c.(*dohClient)
+	require.True(t, ok)
+	defer func() { require.NoError(t, dc.Close()) }()
+
+	strict := &tls.Config{MinVersion: tls.VersionTLS13, ServerName: "dns.google"}
+	c.SetTLSConfig(strict)
+	tr, ok := dc.httpClient.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.Equal(t, uint16(tls.VersionTLS13), tr.TLSClientConfig.MinVersion)
+	require.Equal(t, uint16(tls.VersionTLS13), strict.MinVersion)
+
+	legacy := &tls.Config{MinVersion: tls.VersionTLS10, ServerName: "dns.google"} //nolint:gosec // test verifies that SetTLSConfig raises weak caller settings to TLS 1.2
+	c.SetTLSConfig(legacy)
+	tr, ok = dc.httpClient.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.Equal(t, uint16(tls.VersionTLS12), tr.TLSClientConfig.MinVersion)
+	require.Equal(t, uint16(tls.VersionTLS10), legacy.MinVersion)
 }
 
 // TestDoHClientSetTLSConfigConcurrent verifies that concurrent calls to SetTLSConfig

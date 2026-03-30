@@ -21,6 +21,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -500,6 +501,19 @@ func TestSetup_TLSServer(t *testing.T) {
 	require.Equal(t, "myserver.example.com", f.tlsServerName)
 }
 
+// TestSetup_TLSServernameAlias verifies that the documented Corefile spelling
+// "tls_servername <name>" is accepted in addition to the legacy "tls-server"
+// alias.
+func TestSetup_TLSServernameAlias(t *testing.T) {
+	source := `fanout . 127.0.0.1 {
+	tls_servername myserver.example.com
+}`
+	c := caddy.NewTestController("dns", source)
+	f, err := parseFanout(c)
+	require.NoError(t, err)
+	require.Equal(t, "myserver.example.com", f.tlsServerName)
+}
+
 // TestSetup_Race verifies that during Corefile parsing, the "race" directive sets f.Race = true.
 func TestSetup_Race(t *testing.T) {
 	source := `fanout . 127.0.0.1 127.0.0.2 {
@@ -520,6 +534,53 @@ func TestClient_SetTLSConfig(t *testing.T) {
 	tlsCfg := &tls.Config{}
 	c.SetTLSConfig(tlsCfg)
 	require.Equal(t, TCPTLS, c.Net(), "SetTLSConfig should switch network to tcp-tls")
+}
+
+// TestClient_SetTLSConfigDrainsPooledConnections verifies that changing a plain
+// client's TLS mode clears any previously pooled plain-TCP connections so they
+// cannot be reused after the switch to DNS-over-TLS.
+func TestClient_SetTLSConfigDrainsPooledConnections(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = ln.Close() }()
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, acceptErr := ln.Accept()
+		if acceptErr != nil {
+			return
+		}
+		accepted <- conn
+	}()
+
+	clientAny := NewClient(ln.Addr().String(), TCP)
+	c, ok := clientAny.(*client)
+	require.True(t, ok)
+
+	conn, err := c.transport.Dial(context.Background(), TCP)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+
+	select {
+	case serverConn := <-accepted:
+		defer func() { _ = serverConn.Close() }()
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test server to accept the pooled connection")
+	}
+
+	c.transport.Yield(conn)
+	c.SetTLSConfig(&tls.Config{})
+
+	tr, ok := c.transport.(*transportImpl)
+	require.True(t, ok)
+	select {
+	case pooled := <-tr.pool:
+		if pooled != nil {
+			_ = pooled.Close()
+		}
+		t.Fatal("expected pooled plain-TCP connections to be drained after SetTLSConfig")
+	default:
+	}
 }
 
 // TestClient_NetAndEndpoint verifies that Net() and Endpoint() on a newly created client

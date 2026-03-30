@@ -29,19 +29,29 @@ import (
 
 const connPoolSize = 2
 
-// Transport represent a solution to connect to remote DNS endpoint with specific network
+// Transport manages reusable network connections to one upstream endpoint.
+//
+// Fanout clients use Transport to dial the upstream, apply TLS settings, and
+// recycle only healthy TCP/TLS connections across requests. Callers normally use
+// NewClient instead of working with Transport directly unless they are testing
+// low-level connection behavior.
 type Transport interface {
+	// Dial returns a pooled connection when available or establishes a new one.
 	Dial(ctx context.Context, net string) (*dns.Conn, error)
 	// Yield returns a healthy connection to the pool for reuse.
 	// Only call this for connections that completed a successful request-response cycle.
 	// For failed connections, call conn.Close() instead.
 	Yield(conn *dns.Conn)
+	// SetTLSConfig replaces the TLS settings used for future TLS dials.
 	SetTLSConfig(*tls.Config)
 	// Close drains the connection pool and releases resources.
 	Close()
 }
 
-// NewTransport creates new transport with address
+// NewTransport creates a transport for a single upstream address.
+//
+// The addr parameter should be a host:port pair. Returned transports keep a
+// small pool of reusable TCP/TLS connections for that endpoint.
 func NewTransport(addr string) Transport {
 	return &transportImpl{
 		addr: addr,
@@ -59,8 +69,13 @@ type transportImpl struct {
 // SetTLSConfig sets tls config for transport
 func (t *transportImpl) SetTLSConfig(c *tls.Config) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.tlsConfig = c
+	if c == nil {
+		t.tlsConfig = nil
+	} else {
+		t.tlsConfig = c.Clone()
+	}
+	t.mu.Unlock()
+	t.Close()
 }
 
 // Close drains pooled connections and releases resources.
@@ -79,7 +94,11 @@ func (t *transportImpl) Close() {
 // If the pool is full, the connection is closed instead.
 // UDP connections are always closed since they are cheap to create.
 func (t *transportImpl) Yield(conn *dns.Conn) {
-	if conn == nil {
+	if conn == nil || conn.Conn == nil {
+		return
+	}
+	if _, isUDP := conn.Conn.(*net.UDPConn); isUDP {
+		_ = conn.Close()
 		return
 	}
 	select {
