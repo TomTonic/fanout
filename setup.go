@@ -317,6 +317,7 @@ var parseRegistry = map[string]func(*Fanout, *caddyfile.Dispenser) error{
 	"tls":                             parseTLS,
 	"network":                         parseProtocol,
 	"tls-server":                      parseTLSServer,
+	"tls_servername":                  parseTLSServer,
 	"worker-count":                    parseWorkerCount,
 	"policy":                          parsePolicy,
 	"weighted-random-server-count":    parseWeightedRandomServerCount,

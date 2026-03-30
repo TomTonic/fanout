@@ -21,6 +21,8 @@ import (
 	"context"
 	"crypto/tls"
 	"math"
+	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -33,21 +35,39 @@ import (
 
 var errMaxReadLoopExceeded = errors.New("maximum read loop iterations exceeded without matching response ID")
 
-// Client represents the proxy for remote DNS server
+// Client represents one configured upstream DNS endpoint.
+//
+// Implementations send a single DNS request to a single upstream over one
+// transport family and expose metadata fanout uses for logging, metrics, and
+// runtime TLS reconfiguration. Callers typically obtain a Client via
+// NewClient, NewDoHClient, NewDoH3Client, or NewDoQClient during setup.
 type Client interface {
+	// Request sends one DNS request to the upstream and returns the DNS response.
 	Request(context.Context, *request.Request) (*dns.Msg, error)
+	// Endpoint returns the configured upstream endpoint string.
 	Endpoint() string
+	// Net returns the transport identifier used for this upstream.
 	Net() string
+	// SetTLSConfig replaces the TLS settings used for future connections.
 	SetTLSConfig(*tls.Config)
 }
 
 type client struct {
+	mu        sync.RWMutex
 	transport Transport
 	addr      string
 	net       string
 }
 
-// NewClient creates new client with specific addr and network
+// NewClient creates a plain DNS client for addr over net.
+//
+// The addr parameter should be a host:port pair understood by the DNS client.
+// The net parameter should be one of UDP, TCP, or TCPTLS. Fanout typically uses
+// UDP or TCP during parsing and switches to TCPTLS later via SetTLSConfig when
+// a Corefile upstream requires DNS-over-TLS.
+//
+// The returned Client reuses healthy TCP/TLS connections through an internal
+// transport pool. Address validation happens lazily when Request dials.
 func NewClient(addr, net string) Client {
 	a := &client{
 		addr:      addr,
@@ -59,6 +79,9 @@ func NewClient(addr, net string) Client {
 
 // SetTLSConfig sets tls config for client
 func (c *client) SetTLSConfig(cfg *tls.Config) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if cfg != nil {
 		c.net = TCPTLS
 	}
@@ -67,6 +90,8 @@ func (c *client) SetTLSConfig(cfg *tls.Config) {
 
 // Network type of client
 func (c *client) Net() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.net
 }
 
@@ -77,18 +102,26 @@ func (c *client) Endpoint() string {
 
 // Close releases resources held by this client (drains the connection pool).
 func (c *client) Close() error {
-	c.transport.Close()
+	c.mu.RLock()
+	transport := c.transport
+	c.mu.RUnlock()
+	transport.Close()
 	return nil
 }
 
 // Request sends request to DNS server
 func (c *client) Request(ctx context.Context, r *request.Request) (*dns.Msg, error) {
+	c.mu.RLock()
+	network := c.net
+	transport := c.transport
+	c.mu.RUnlock()
+
 	ctx, finish := withRequestSpan(ctx, c.addr)
 	defer finish()
 	start := time.Now()
 	observeRequestAttempt(c.addr)
 
-	conn, err := c.transport.Dial(ctx, c.net)
+	conn, err := transport.Dial(ctx, network)
 	if err != nil {
 		if shouldSuppressRequestFailure(ctx, err) {
 			return nil, observeSuppressedRequestFailure(ctx, c.addr, err)
@@ -105,12 +138,17 @@ func (c *client) Request(ctx context.Context, r *request.Request) (*dns.Msg, err
 	done := make(chan struct{})
 	defer func() {
 		close(done)
+		c.mu.RLock()
+		currentNet := c.net
+		c.mu.RUnlock()
 		// Only yield the connection back to the pool if the request succeeded
-		// and the context goroutine did not close it.
-		if err != nil || cancelled.Load() {
+		// and the context goroutine did not close it. Runtime TLS changes close
+		// stale connections by switching c.net, so we only reuse connections whose
+		// request-time transport still matches the current client mode.
+		if err != nil || cancelled.Load() || currentNet != network || !canReusePooledConn(conn, network) {
 			_ = conn.Close()
 		} else {
-			c.transport.Yield(conn)
+			transport.Yield(conn)
 		}
 	}()
 	go func() {
@@ -133,6 +171,26 @@ func (c *client) Request(ctx context.Context, r *request.Request) (*dns.Msg, err
 
 	observeRequestResponse(c.addr, start, ret)
 	return ret, nil
+}
+
+// canReusePooledConn reports whether conn is safe to return to the shared pool
+// for the given plain-DNS client transport mode.
+func canReusePooledConn(conn *dns.Conn, network string) bool {
+	if conn == nil || conn.Conn == nil {
+		return false
+	}
+	if _, isUDP := conn.Conn.(*net.UDPConn); isUDP {
+		return false
+	}
+	_, isTLS := conn.Conn.(*tls.Conn)
+	switch network {
+	case TCPTLS:
+		return isTLS
+	case TCP:
+		return !isTLS
+	default:
+		return false
+	}
 }
 
 // clampUDPSize restricts the UDP buffer size to the valid DNS range [512, 65535].

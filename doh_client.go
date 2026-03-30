@@ -111,9 +111,12 @@ func (c *dohClient) SetTLSConfig(cfg *tls.Config) {
 	if cfg == nil {
 		return
 	}
-	cfg.MinVersion = tls.VersionTLS12
+	nextCfg := cfg.Clone()
+	if nextCfg.MinVersion < tls.VersionTLS12 {
+		nextCfg.MinVersion = tls.VersionTLS12
+	}
 
-	newClient := newHTTP2ClientWithBootstrap(cfg, c.bootstrap)
+	newClient := newHTTP2ClientWithBootstrap(nextCfg, c.bootstrap)
 
 	c.mu.Lock()
 	old := c.httpClient

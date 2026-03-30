@@ -78,7 +78,8 @@ fanout FROM TO... {
     The server certificate is verified using the specified CA file
 * `tls_servername` **NAME** — allows you to set a server name in the TLS configuration; for instance `9.9.9.9`
   needs this to be set to `dns.quad9.net`. Multiple upstreams are still allowed in this scenario,
-  but they have to use the same `tls_servername`. E.g. mixing `9.9.9.9` (Quad9) with `1.1.1.1`
+    but they have to use the same `tls_servername`. The legacy alias `tls-server` is also accepted.
+    E.g. mixing `9.9.9.9` (Quad9) with `1.1.1.1`
   (Cloudflare) will not work.
 * `worker-count` — the number of parallel queries per request. By default equals the count of the upstream list. Use this only to reduce parallel queries per request.
 * `policy` — specifies the policy for DNS server selection. The default is `sequential`.

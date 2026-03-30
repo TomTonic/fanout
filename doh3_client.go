@@ -33,13 +33,15 @@ import (
 // It follows RFC 8484 at the application layer while using QUIC (RFC 9000) as the transport,
 // providing reduced connection-establishment latency and improved multiplexing.
 type doh3Client struct {
-	endpoint      string           // full URL, e.g. "https://dns.google/dns-query"
-	bootstrap     *bootstrapConfig // bootstrap config for hostname resolution (nil = system default)
-	mu            sync.Mutex       // protects h3Client, transport, and oldTransports during SetTLSConfig
-	h3Client      *http.Client
-	transport     *http3.Transport
-	oldTransports []*http3.Transport // transports replaced by SetTLSConfig, awaiting cleanup
+	endpoint          string           // full URL, e.g. "https://dns.google/dns-query"
+	bootstrap         *bootstrapConfig // bootstrap config for hostname resolution (nil = system default)
+	mu                sync.Mutex       // protects h3Client, transport, and retiredTransports during SetTLSConfig
+	h3Client          *http.Client
+	transport         *http3.Transport
+	retiredTransports map[*http3.Transport]struct{} // replaced transports waiting for grace-period cleanup
 }
+
+var doh3RetiredTransportCloseDelay = readTimeout + dialTimeout
 
 // NewDoH3Client creates a new DNS-over-HTTPS client using HTTP/3 (QUIC) transport.
 // The endpoint must be a full HTTPS URL (e.g. "https://dns.google/dns-query").
@@ -77,9 +79,10 @@ func newDoH3ClientFull(endpoint string, tlsConfig *tls.Config, bootstrap *bootst
 	}
 
 	return &doh3Client{
-		endpoint:  endpoint,
-		bootstrap: bootstrap,
-		transport: h3Transport,
+		endpoint:          endpoint,
+		bootstrap:         bootstrap,
+		transport:         h3Transport,
+		retiredTransports: make(map[*http3.Transport]struct{}),
 		h3Client: &http.Client{
 			Transport: h3Transport,
 			Timeout:   readTimeout + dialTimeout,
@@ -117,20 +120,21 @@ func bootstrapQUICDial(bootstrap *bootstrapConfig) func(ctx context.Context, add
 
 // SetTLSConfig updates the TLS configuration used by the HTTP/3 QUIC transport.
 // HTTP/3 requires TLS 1.3 as a minimum; this is enforced automatically.
-// A new http.Client and transport are created. The old transport is not closed
-// eagerly to avoid racing with in-flight requests; it will be garbage-collected
-// once all references (including in-flight snapshots) are released.
+// A new http.Client and transport are created. The previous transport is kept
+// alive briefly so in-flight requests can finish, then closed after a grace
+// period to avoid accumulating retired QUIC transports indefinitely.
 func (c *doh3Client) SetTLSConfig(cfg *tls.Config) {
 	if cfg == nil {
 		return
 	}
+	nextCfg := cfg.Clone()
 	// QUIC requires TLS 1.3 minimum.
-	if cfg.MinVersion < tls.VersionTLS13 {
-		cfg.MinVersion = tls.VersionTLS13
+	if nextCfg.MinVersion < tls.VersionTLS13 {
+		nextCfg.MinVersion = tls.VersionTLS13
 	}
 
 	newTransport := &http3.Transport{
-		TLSClientConfig: cfg.Clone(),
+		TLSClientConfig: nextCfg,
 	}
 	if c.bootstrap != nil {
 		newTransport.Dial = bootstrapQUICDial(c.bootstrap)
@@ -140,11 +144,22 @@ func (c *doh3Client) SetTLSConfig(cfg *tls.Config) {
 		Timeout:   readTimeout + dialTimeout,
 	}
 
+	var old *http3.Transport
 	c.mu.Lock()
-	c.oldTransports = append(c.oldTransports, c.transport)
+	old = c.transport
+	if old != nil {
+		if c.retiredTransports == nil {
+			c.retiredTransports = make(map[*http3.Transport]struct{})
+		}
+		c.retiredTransports[old] = struct{}{}
+	}
 	c.transport = newTransport
 	c.h3Client = newClient
 	c.mu.Unlock()
+
+	if old != nil {
+		c.scheduleRetiredTransportClose(old)
+	}
 }
 
 // Net returns the network type identifier for this client.
@@ -169,16 +184,44 @@ func (c *doh3Client) Close() error {
 // This stops background goroutines started by quic-go and should be called during shutdown.
 func (c *doh3Client) closeTransports() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	current := c.transport
+	c.transport = nil
+	retired := c.retiredTransports
+	c.retiredTransports = nil
+	c.mu.Unlock()
 
-	if c.transport != nil {
-		_ = c.transport.Close()
-		c.transport = nil
+	if current != nil {
+		_ = current.Close()
 	}
-	for _, t := range c.oldTransports {
+	for t := range retired {
 		_ = t.Close()
 	}
-	c.oldTransports = nil
+}
+
+func (c *doh3Client) closeRetiredTransport(t *http3.Transport) {
+	c.mu.Lock()
+	if c.retiredTransports == nil {
+		c.mu.Unlock()
+		return
+	}
+	if _, ok := c.retiredTransports[t]; !ok {
+		c.mu.Unlock()
+		return
+	}
+	delete(c.retiredTransports, t)
+	c.mu.Unlock()
+	_ = t.Close()
+}
+
+func (c *doh3Client) scheduleRetiredTransportClose(t *http3.Transport) {
+	ctx, cancel := context.WithTimeout(context.Background(), doh3RetiredTransportCloseDelay)
+	go func() {
+		defer cancel()
+		<-ctx.Done()
+		if ctx.Err() == context.DeadlineExceeded {
+			c.closeRetiredTransport(t)
+		}
+	}()
 }
 
 // Request sends a DNS query to the DoH server over HTTP/3 (QUIC) using HTTP POST (RFC 8484).

@@ -518,6 +518,34 @@ func TestDoH3ClientSetTLSConfig(t *testing.T) {
 	require.GreaterOrEqual(t, dc.transport.TLSClientConfig.MinVersion, uint16(tls.VersionTLS13))
 }
 
+// TestDoH3ClientSetTLSConfigCleansRetiredTransports verifies that repeated TLS
+// reconfiguration does not leave retired HTTP/3 transports referenced forever.
+func TestDoH3ClientSetTLSConfigCleansRetiredTransports(t *testing.T) {
+	oldDelay := doh3RetiredTransportCloseDelay
+	doh3RetiredTransportCloseDelay = 50 * time.Millisecond
+	defer func() { doh3RetiredTransportCloseDelay = oldDelay }()
+
+	c := NewDoH3Client("https://dns.google/dns-query")
+	defer closeDoH3Client(t, c)
+
+	dc, ok := c.(*doh3Client)
+	require.True(t, ok)
+
+	c.SetTLSConfig(&tls.Config{MinVersion: tls.VersionTLS13, ServerName: "dns.google"})
+	c.SetTLSConfig(&tls.Config{MinVersion: tls.VersionTLS13, ServerName: "dns.google"})
+
+	dc.mu.Lock()
+	retiredNow := len(dc.retiredTransports)
+	dc.mu.Unlock()
+	require.GreaterOrEqual(t, retiredNow, 1)
+
+	require.Eventually(t, func() bool {
+		dc.mu.Lock()
+		defer dc.mu.Unlock()
+		return len(dc.retiredTransports) == 0
+	}, time.Second, 10*time.Millisecond)
+}
+
 // TestDoH3ClientSetTLSConfigConcurrent verifies that concurrent calls to SetTLSConfig
 // and Request do not trigger a data race. Run with -race to detect races.
 func TestDoH3ClientSetTLSConfigConcurrent(t *testing.T) {
