@@ -33,13 +33,14 @@ import (
 	"github.com/miekg/dns"
 )
 
-// TestSetup is a comprehensive table-driven test for Corefile parsing via parseFanout.
-// Covers 9 valid configurations (minimal, weighted-random with load-factor, except + worker-count,
-// two hosts with TCP, worker-count + timeout, attempt-count, default load-factor, sequential policy)
-// and 12 invalid configurations (bad host, bad from, worker-count too low, non-integer worker-count,
-// invalid except domain, unknown network, negative server-count, load-factor too high/zero/count
-// mismatch, missing load-factor args). For valid cases, asserts From, Timeout, Attempts, WorkerCount,
-// net, serverCount, policyType, loadFactor, ExcludeDomains, and client endpoints.
+// TestSetup verifies that CoreDNS users can configure fanout with valid
+// Corefile stanzas and receive actionable parse errors for invalid ones.
+//
+// This test covers the fanout setup and parsing layer.
+//
+// It exercises representative valid and invalid combinations of policies,
+// workers, retries, excluded domains, race mode, and upstream declarations,
+// then asserts the resulting Fanout fields and client endpoints.
 func TestSetup(t *testing.T) {
 	tests := []struct {
 		name                                string

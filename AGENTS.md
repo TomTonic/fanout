@@ -1,7 +1,5 @@
 # AI Agent Guidelines
 
-<!-- TODO: Customize this file for your project. -->
-
 ## Project Overview
 
 This is a Go project. All source code is in Go. The project uses Go modules
@@ -14,16 +12,17 @@ go build ./...          # Build
 go test ./...           # Run tests
 go test ./... -race     # Run tests with race detector
 go test ./... -cover    # Run tests with coverage
-golangci-lint run       # Run linter (uses .golangci.yml)
+golangci-lint run       # Run linter (uses .golangci.yaml)
 ```
 
 ## Code Style
 
 - Follow standard Go conventions (`gofmt`, `go vet`).
-- Use `golangci-lint` with the project's `.golangci.yml` configuration.
+- Use `golangci-lint` with the project's `.golangci.yaml` configuration.
 - Keep functions focused and under 60 lines where practical.
 - Prefer returning errors over panicking.
-- Use Go's standard error wrapping: `fmt.Errorf("context: %w", err)`.
+- Use the repository-standard error helpers from `github.com/pkg/errors`
+   (`errors.Wrap`, `errors.Wrapf`, `errors.Errorf`). CI rejects `fmt.Errorf`.
 - Do not use `panic()` in library code.
 
 ### Function and Method Documentation

@@ -21,13 +21,21 @@ import (
 	"strings"
 )
 
-// Domain represents DNS domain name
+// Domain stores excluded DNS names in a suffix trie for fast lookup.
+// Fanout builds this structure from except and except-file directives and
+// checks it for each incoming query before contacting upstream resolvers.
 type Domain interface {
+	// Get returns the child node for one label, or nil if absent.
 	Get(string) Domain
+	// AddString inserts a fully-qualified domain name into the trie.
 	AddString(string)
+	// Add attaches a child node for one label.
 	Add(string, Domain)
+	// Contains reports whether the trie contains the given fully-qualified name.
 	Contains(string) bool
+	// IsFinal reports whether this node marks the end of an excluded name.
 	IsFinal() bool
+	// Finish marks the current node as the end of an excluded name.
 	Finish()
 }
 
@@ -121,7 +129,9 @@ func (l *domain) Get(s string) Domain {
 	return l.children[s]
 }
 
-// NewDomain creates new domain instance
+// NewDomain creates an empty exclusion trie.
+// Callers typically use it during Fanout initialization and then populate it
+// through AddString while parsing Corefile directives.
 func NewDomain() Domain {
 	return &domain{children: map[string]Domain{}}
 }
