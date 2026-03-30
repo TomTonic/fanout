@@ -8,7 +8,8 @@
 #   4. Add variable COVERAGE_GIST_ID   = the gist ID
 #
 # Badge markdown for your README:
-#   [![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/<USER>/<GIST_ID>/raw/<REPO>-coverage.json)]  # yamllint disable-line line-length
+#   [![Coverage](https://img.shields.io/endpoint?url=
+#   https://gist.githubusercontent.com/<USER>/<GIST_ID>/raw/<REPO>-coverage.json)]
 #   (https://gist.github.com/<USER>/<GIST_ID>)
 
 name: Test Coverage
