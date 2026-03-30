@@ -12,7 +12,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}  # yamllint disable-line line-length
+  group: >-
+    ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -82,7 +83,8 @@ jobs:
       - name: Exclude fmt.Errorf
         run: |
           if grep -r --include='*.go' 'fmt.Errorf' . ; then
-            echo "Please use errors.Errorf (or errors.New or errors.Wrap or errors.Wrapf) as appropriate rather than fmt.Errorf"
+            echo "Please use errors.New/errors.Wrap/errors.Wrapf/errors.Errorf"
+            echo "instead of fmt.Errorf"
             exit 1
           fi
       - name: Exclude replace in go.mod
