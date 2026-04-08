@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.14.3'
+          python-version: '3.14.4'
       - name: Install yamllint
         run: python -m pip install --upgrade --user yamllint
       - name: Run yamllint
