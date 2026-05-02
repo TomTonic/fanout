@@ -372,8 +372,8 @@ func TestServeDNS_WriteFormErrErrorPropagates(t *testing.T) {
 	s := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		msg.SetReply(r)
-		msg.Question = []dns.Question{{Name: "wrong.example.", Qclass: dns.ClassINET, Qtype: dns.TypeA}}
-		msg.Answer = append(msg.Answer, test.A("wrong.example. IN A 1.2.3.4"))
+		msg.Question = []dns.Question{{Name: wrongExampleFQDN, Qclass: dns.ClassINET, Qtype: dns.TypeA}}
+		msg.Answer = append(msg.Answer, test.A(wrongExampleFQDN+" IN A 1.2.3.4"))
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 	defer s.close()

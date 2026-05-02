@@ -288,7 +288,7 @@ func TestRealWorldCloudflareUDP(t *testing.T) {
 	}
 
 	c := NewClient(cfPlain, UDP)
-	requireRealWorldCapability(t, "UDP", func(ctx context.Context) error {
+	requireRealWorldCapability(t, testCaseUDP, func(ctx context.Context) error {
 		_, err := c.Request(ctx, newRealWorldRequest(dns.TypeA))
 		return err
 	})
@@ -297,7 +297,7 @@ func TestRealWorldCloudflareUDP(t *testing.T) {
 	defer cancel()
 
 	resp, err := c.Request(ctx, newRealWorldRequest(dns.TypeA))
-	requireRealWorldResponse(t, resp, err, "UDP")
+	requireRealWorldResponse(t, resp, err, testCaseUDP)
 
 	t.Logf("UDP response: %d answer(s), first: %s", len(resp.Answer), resp.Answer[0].String())
 }
@@ -555,16 +555,15 @@ func TestRealWorldCloudflareAllProtocolsAAAA(t *testing.T) {
 	doqc := NewDoQClient(agDoQAddr)
 
 	protocols := []protoTest{
-		{name: "UDP", client: NewClient(cfPlain, UDP), close: func() {}},
-		{name: "TCP", client: NewClient(cfPlain, TCP), close: func() {}},
-		{name: "DoT", client: dotClient, close: func() {}},
+		{name: testCaseUDP, client: NewClient(cfPlain, UDP), close: func() {}},
+		{name: testCaseTCP, client: NewClient(cfPlain, TCP), close: func() {}},
 		{name: "DoH", client: NewDoHClient(cfDoHURL), close: func() {}},
 		{name: "DoH3", client: doh3c, close: func() {
 			if dc, ok := doh3c.(*doh3Client); ok {
 				_ = dc.transport.Close()
 			}
 		}},
-		{name: "DoQ", client: doqc, close: func() {
+		{name: testCaseDoQ, client: doqc, close: func() {
 			if dc, ok := doqc.(*doqClient); ok {
 				dc.closeConn()
 			}

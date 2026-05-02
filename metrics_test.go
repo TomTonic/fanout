@@ -125,7 +125,7 @@ func TestClientRequestMetricsOnDialFailure(t *testing.T) {
 			},
 		},
 		addr: endpoint,
-		net:  "udp",
+		net:  UDP,
 	}
 
 	_, err := c.Request(context.Background(), newTestRequest())
@@ -155,7 +155,7 @@ func TestDoHRequestMetricsOnSuccess(t *testing.T) {
 		body := mustPackReply(t, req.Req, dns.RcodeSuccess)
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{dohContentType}},
+			Header:     http.Header{httpHeaderContentType: []string{dohContentType}},
 			Body:       io.NopCloser(bytes.NewReader(body)),
 		}, nil
 	})}
@@ -187,7 +187,7 @@ func TestDoHRequestMetricsOnHTTPStatusFailure(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripperFunc(func(_ *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusBadGateway,
-			Header:     http.Header{"Content-Type": []string{dohContentType}},
+			Header:     http.Header{httpHeaderContentType: []string{dohContentType}},
 			Body:       io.NopCloser(bytes.NewReader(nil)),
 		}, nil
 	})}
@@ -206,7 +206,7 @@ func TestDoHRequestMetricsOnHTTPStatusFailure(t *testing.T) {
 	require.Equal(t, before.durationCount, after.durationCount)
 	assertRequestOutcomeInvariant(t, before, after)
 
-	unexpectedLabelValue := counterValue(t, requestErrorMetricName, map[string]string{"to": endpoint, "error": "HTTP 502"})
+	unexpectedLabelValue := counterValue(t, requestErrorMetricName, map[string]string{metricLabelTo: endpoint, metricLabelError: "HTTP 502"})
 	require.Zero(t, unexpectedLabelValue)
 }
 
@@ -219,7 +219,7 @@ func TestDoHRequestMetricsOnContentTypeFailure(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripperFunc(func(_ *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{"text/plain"}},
+			Header:     http.Header{httpHeaderContentType: []string{"text/plain"}},
 			Body:       io.NopCloser(bytes.NewReader(nil)),
 		}, nil
 	})}
@@ -238,7 +238,7 @@ func TestDoHRequestMetricsOnContentTypeFailure(t *testing.T) {
 	require.Equal(t, before.durationCount, after.durationCount)
 	assertRequestOutcomeInvariant(t, before, after)
 
-	unexpectedLabelValue := counterValue(t, requestErrorMetricName, map[string]string{"to": endpoint, "error": "unexpected content-type \"text/plain\""})
+	unexpectedLabelValue := counterValue(t, requestErrorMetricName, map[string]string{metricLabelTo: endpoint, metricLabelError: "unexpected content-type \"text/plain\""})
 	require.Zero(t, unexpectedLabelValue)
 }
 
@@ -385,7 +385,7 @@ func TestDialFailureErrorClassMatchesPrometheus(t *testing.T) {
 			},
 		},
 		addr: "error-class-test.invalid:53",
-		net:  "udp",
+		net:  UDP,
 	}
 
 	_, err := c.Request(context.Background(), newTestRequest())
@@ -413,15 +413,15 @@ func mustPackReply(t *testing.T, req *dns.Msg, rcode int) []byte {
 func snapshotMetrics(t *testing.T, endpoint string, errClass requestErrorClass, rcode string) metricsSnapshot {
 	t.Helper()
 	return metricsSnapshot{
-		attempts:        counterValue(t, requestCountMetricName, map[string]string{"to": endpoint}),
-		totalErrors:     sumCounterValues(t, requestErrorMetricName, map[string]string{"to": endpoint}),
-		errorCount:      counterValue(t, requestErrorMetricName, map[string]string{"to": endpoint, "error": string(errClass)}),
-		cancelCount:     counterValue(t, requestCancelMetricName, map[string]string{"to": endpoint}),
-		successCount:    counterValue(t, requestSuccessMetricName, map[string]string{"to": endpoint}),
-		winCount:        counterValue(t, responseWinMetricName, map[string]string{"to": endpoint}),
-		rcodeCount:      counterValue(t, rcodeCountMetricName, map[string]string{"to": endpoint, "rcode": rcode}),
-		durationCount:   histogramCount(t, requestDurationMetricName, map[string]string{"to": endpoint}),
-		totalRcodeCount: sumCounterValues(t, rcodeCountMetricName, map[string]string{"to": endpoint}),
+		attempts:        counterValue(t, requestCountMetricName, map[string]string{metricLabelTo: endpoint}),
+		totalErrors:     sumCounterValues(t, requestErrorMetricName, map[string]string{metricLabelTo: endpoint}),
+		errorCount:      counterValue(t, requestErrorMetricName, map[string]string{metricLabelTo: endpoint, metricLabelError: string(errClass)}),
+		cancelCount:     counterValue(t, requestCancelMetricName, map[string]string{metricLabelTo: endpoint}),
+		successCount:    counterValue(t, requestSuccessMetricName, map[string]string{metricLabelTo: endpoint}),
+		winCount:        counterValue(t, responseWinMetricName, map[string]string{metricLabelTo: endpoint}),
+		rcodeCount:      counterValue(t, rcodeCountMetricName, map[string]string{metricLabelTo: endpoint, metricLabelRcode: rcode}),
+		durationCount:   histogramCount(t, requestDurationMetricName, map[string]string{metricLabelTo: endpoint}),
+		totalRcodeCount: sumCounterValues(t, rcodeCountMetricName, map[string]string{metricLabelTo: endpoint}),
 	}
 }
 

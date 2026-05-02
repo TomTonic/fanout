@@ -178,7 +178,7 @@ func testRaceContinueOnErrorTerminalResponse(t *testing.T, fastRcode, expectedRc
 func TestServeDNS_DomainMismatch_CallsNext(t *testing.T) {
 	defer goleak.VerifyNone(t)
 	f := New()
-	f.From = "example.org."
+	f.From = exampleOrgFQDN
 	f.Next = plugin.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
 		msg := new(dns.Msg)
 		msg.SetReply(r)
@@ -231,7 +231,7 @@ func TestServeDNS_FormatError_MismatchedId(t *testing.T) {
 		msg := new(dns.Msg)
 		msg.SetReply(r)
 		// Tamper the question to cause a mismatch
-		msg.Question = []dns.Question{{Name: "wrong.example.", Qclass: dns.ClassINET, Qtype: dns.TypeA}}
+		msg.Question = []dns.Question{{Name: wrongExampleFQDN, Qclass: dns.ClassINET, Qtype: dns.TypeA}}
 		msg.Answer = append(msg.Answer, test.A("wrong.example. IN A 1.2.3.4"))
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
@@ -528,8 +528,8 @@ func TestSetup_Race(t *testing.T) {
 // TestClient_SetTLSConfig verifies that calling SetTLSConfig on a client switches its network
 // type from the original (e.g. "udp") to "tcp-tls".
 func TestClient_SetTLSConfig(t *testing.T) {
-	c := NewClient("127.0.0.1:53", "udp")
-	require.Equal(t, "udp", c.Net())
+	c := NewClient(localDNS53, UDP)
+	require.Equal(t, UDP, c.Net())
 
 	tlsCfg := &tls.Config{}
 	c.SetTLSConfig(tlsCfg)
