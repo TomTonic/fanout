@@ -37,11 +37,11 @@ func TestDomainBasic(t *testing.T) {
 		expected bool
 	}{
 		{".", ".", true},
-		{"example.org.", ".", true},
-		{"example.org.", "example.org.", true},
-		{"example.org", "example.org", true},
-		{"example.org.", "org.", true},
-		{"org.", "example.org.", false},
+		{exampleOrgFQDN, ".", true},
+		{exampleOrgFQDN, exampleOrgFQDN, true},
+		{exampleOrgNoDot, exampleOrgNoDot, true},
+		{exampleOrgFQDN, orgDot, true},
+		{orgDot, exampleOrgFQDN, false},
 	}
 
 	for i, s := range samples {

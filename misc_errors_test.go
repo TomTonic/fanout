@@ -65,12 +65,12 @@ func TestAddClient_IncrementsCounters(t *testing.T) {
 	require.Equal(t, 0, f.WorkerCount)
 	require.Equal(t, 0, f.serverCount)
 
-	f.AddClient(NewClient("127.0.0.1:53", "udp"))
+	f.AddClient(NewClient(localDNS53, UDP))
 	require.Equal(t, 1, f.WorkerCount)
 	require.Equal(t, 1, f.serverCount)
 	require.Len(t, f.clients, 1)
 
-	f.AddClient(NewClient("127.0.0.2:53", "udp"))
+	f.AddClient(NewClient("127.0.0.2:53", UDP))
 	require.Equal(t, 2, f.WorkerCount)
 	require.Equal(t, 2, f.serverCount)
 	require.Len(t, f.clients, 2)

@@ -80,15 +80,15 @@ func newDoH3TestServer(t *testing.T, handler dns.HandlerFunc) *doh3TestServer { 
 		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
-		DNSNames:     []string{"localhost"},
+		DNSNames:     []string{localhostName},
 	}
 	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	require.NoError(t, err)
 
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: pemTypeCert, Bytes: certDER})
 	keyDER, err := x509.MarshalECPrivateKey(key)
 	require.NoError(t, err)
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: pemTypeECKey, Bytes: keyDER})
 
 	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
 	require.NoError(t, err)
@@ -417,7 +417,7 @@ func TestDoH3ClientTXTRecord(t *testing.T) {
 		msg.SetReply(r)
 		msg.Answer = append(msg.Answer, &dns.TXT{
 			Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 300},
-			Txt: []string{"v=spf1 include:example.com ~all"},
+			Txt: []string{spfRecord},
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
@@ -438,7 +438,7 @@ func TestDoH3ClientTXTRecord(t *testing.T) {
 
 	txt, ok := resp.Answer[0].(*dns.TXT)
 	require.True(t, ok)
-	require.Equal(t, []string{"v=spf1 include:example.com ~all"}, txt.Txt)
+	require.Equal(t, []string{spfRecord}, txt.Txt)
 }
 
 // TestDoH3ClientConcurrentRequests verifies that the DoH3 client handles multiple
@@ -508,7 +508,7 @@ func TestDoH3ClientSetTLSConfig(t *testing.T) {
 	// Should not panic with a real config.
 	c.SetTLSConfig(&tls.Config{
 		MinVersion: tls.VersionTLS12, // should be upgraded to TLS 1.3
-		ServerName: "dns.google",
+		ServerName: dnsGoogleHost,
 	})
 	require.Equal(t, DOH3, c.Net())
 
@@ -531,8 +531,8 @@ func TestDoH3ClientSetTLSConfigCleansRetiredTransports(t *testing.T) {
 	dc, ok := c.(*doh3Client)
 	require.True(t, ok)
 
-	c.SetTLSConfig(&tls.Config{MinVersion: tls.VersionTLS13, ServerName: "dns.google"})
-	c.SetTLSConfig(&tls.Config{MinVersion: tls.VersionTLS13, ServerName: "dns.google"})
+	c.SetTLSConfig(&tls.Config{MinVersion: tls.VersionTLS13, ServerName: dnsGoogleHost})
+	c.SetTLSConfig(&tls.Config{MinVersion: tls.VersionTLS13, ServerName: dnsGoogleHost})
 
 	dc.mu.Lock()
 	retiredNow := len(dc.retiredTransports)
@@ -696,27 +696,27 @@ func TestSetupDoH3Config(t *testing.T) {
 	}{
 		{
 			name:         "single-doh3-endpoint",
-			input:        "fanout . h3://dns.google/dns-query",
-			expectedURLs: []string{"https://dns.google/dns-query"},
+			input:        corefileDoH3Google,
+			expectedURLs: []string{dnsGoogleDoHURL},
 			expectedNets: []string{DOH3},
 		},
 		{
 			name:         "multiple-doh3-endpoints",
 			input:        "fanout . h3://dns.google/dns-query h3://cloudflare-dns.com/dns-query",
-			expectedURLs: []string{"https://dns.google/dns-query", "https://cloudflare-dns.com/dns-query"},
+			expectedURLs: []string{dnsGoogleDoHURL, cfDoHURL},
 			expectedNets: []string{DOH3, DOH3},
 		},
 		{
 			name:         "mixed-doh-and-doh3",
 			input:        "fanout . https://dns.google/dns-query h3://cloudflare-dns.com/dns-query",
-			expectedURLs: []string{"https://dns.google/dns-query", "https://cloudflare-dns.com/dns-query"},
+			expectedURLs: []string{dnsGoogleDoHURL, cfDoHURL},
 			expectedNets: []string{DOH, DOH3},
 		},
 		{
 			name:         "mixed-plain-doh-doh3",
-			input:        "fanout . 127.0.0.1 https://dns.google/dns-query h3://cloudflare-dns.com/dns-query",
-			expectedURLs: []string{"127.0.0.1:53", "https://dns.google/dns-query", "https://cloudflare-dns.com/dns-query"},
-			expectedNets: []string{"udp", DOH, DOH3},
+			input:        corefileAllDoH,
+			expectedURLs: []string{localDNS53, dnsGoogleDoHURL, cfDoHURL},
+			expectedNets: []string{UDP, DOH, DOH3},
 		},
 	}
 
@@ -796,9 +796,9 @@ func TestSetupDoH3CaseInsensitive(t *testing.T) {
 		name  string
 		input string
 	}{
-		{"lowercase", "fanout . h3://dns.google/dns-query"},
-		{"uppercase", "fanout . H3://dns.google/dns-query"},
-		{"mixedcase", "fanout . H3://DNS.Google/dns-query"},
+		{testCaseLowercase, "fanout . h3://dns.google/dns-query"},
+		{testCaseUppercase, "fanout . H3://dns.google/dns-query"},
+		{testCaseMixedcase, "fanout . H3://DNS.Google/dns-query"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -838,9 +838,9 @@ func TestDoH3DoesNotBreakExistingSetup(t *testing.T) {
 		expectedNet string
 		expectedN   int
 	}{
-		{name: "plain-udp", input: "fanout . 127.0.0.1", expectedNet: "udp", expectedN: 1},
-		{name: "plain-tcp", input: "fanout . 127.0.0.1 {\nnetwork tcp\n}", expectedNet: "tcp", expectedN: 1},
-		{name: "doh-only", input: "fanout . https://dns.google/dns-query", expectedNet: "udp", expectedN: 1},
+		{name: "plain-udp", input: corefileUDPLocal, expectedNet: UDP, expectedN: 1},
+		{name: "plain-tcp", input: corefileTCPLocal, expectedNet: "tcp", expectedN: 1},
+		{name: testCaseDohOnly, input: corefileDoHGoogle, expectedNet: UDP, expectedN: 1},
 	}
 
 	for _, tc := range tests {
@@ -857,7 +857,7 @@ func TestDoH3DoesNotBreakExistingSetup(t *testing.T) {
 // TestSetupAllThreeTransports verifies that plain, DoH, and DoH3 endpoints can all
 // be configured together in a single fanout stanza.
 func TestSetupAllThreeTransports(t *testing.T) {
-	input := "fanout . 127.0.0.1 https://dns.google/dns-query h3://cloudflare-dns.com/dns-query"
+	input := corefileAllDoH
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
 
@@ -865,12 +865,12 @@ func TestSetupAllThreeTransports(t *testing.T) {
 	require.Len(t, f.clients, 3)
 
 	// Plain clients first, then DoH, then DoH3.
-	require.Equal(t, "127.0.0.1:53", f.clients[0].Endpoint())
-	require.Equal(t, "udp", f.clients[0].Net())
+	require.Equal(t, localDNS53, f.clients[0].Endpoint())
+	require.Equal(t, UDP, f.clients[0].Net())
 
-	require.Equal(t, "https://dns.google/dns-query", f.clients[1].Endpoint())
+	require.Equal(t, dnsGoogleDoHURL, f.clients[1].Endpoint())
 	require.Equal(t, DOH, f.clients[1].Net())
 
-	require.Equal(t, "https://cloudflare-dns.com/dns-query", f.clients[2].Endpoint())
+	require.Equal(t, cfDoHURL, f.clients[2].Endpoint())
 	require.Equal(t, DOH3, f.clients[2].Net())
 }

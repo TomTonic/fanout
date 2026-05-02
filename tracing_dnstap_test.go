@@ -85,7 +85,7 @@ func TestToDnstap_QueryOnlyWithoutRawMessage(t *testing.T) {
 	query.SetQuestion("example.org.", dns.TypeA)
 
 	state := &request.Request{Req: query}
-	client := &dnstapClientStub{addr: "127.0.0.1:53", net: UDP}
+	client := &dnstapClientStub{addr: localDNS53, net: UDP}
 
 	toDnstap(tapPlugin, client, state, nil, time.Now())
 
@@ -111,7 +111,7 @@ func TestToDnstap_QueryAndResponseWithRawMessage(t *testing.T) {
 	reply.SetReply(query)
 
 	state := &request.Request{Req: query}
-	client := &dnstapClientStub{addr: "127.0.0.1:53", net: TCP}
+	client := &dnstapClientStub{addr: localDNS53, net: TCP}
 
 	toDnstap(tapPlugin, client, state, reply, time.Now())
 
@@ -142,7 +142,7 @@ func TestToDnstap_DoHEndpoint(t *testing.T) {
 	query.SetQuestion("example.org.", dns.TypeA)
 
 	state := &request.Request{Req: query}
-	client := &dnstapClientStub{addr: "https://8.8.8.8/dns-query", net: DOH}
+	client := &dnstapClientStub{addr: googleDoH8888, net: DOH}
 
 	toDnstap(tapPlugin, client, state, nil, time.Now())
 
@@ -162,10 +162,10 @@ func TestParseEndpoint(t *testing.T) {
 		wantPort string
 	}{
 		{name: "host:port", endpoint: "127.0.0.1:53", wantHost: "127.0.0.1", wantPort: "53"},
-		{name: "DoT host:port", endpoint: "dns.example.com:853", wantHost: "dns.example.com", wantPort: "853"},
-		{name: "HTTPS URL default port", endpoint: "https://dns.google/dns-query", wantHost: "dns.google", wantPort: "443"},
-		{name: "HTTPS URL explicit port", endpoint: "https://dns.google:8443/dns-query", wantHost: "dns.google", wantPort: "8443"},
-		{name: "HTTPS URL with IP", endpoint: "https://8.8.8.8/dns-query", wantHost: "8.8.8.8", wantPort: "443"},
+		{name: "DoT host:port", endpoint: exampleDoTAddr, wantHost: exampleDoTHost, wantPort: "853"},
+		{name: "HTTPS URL default port", endpoint: dnsGoogleDoHURL, wantHost: dnsGoogleHost, wantPort: "443"},
+		{name: "HTTPS URL explicit port", endpoint: "https://dns.google:8443/dns-query", wantHost: dnsGoogleHost, wantPort: "8443"},
+		{name: "HTTPS URL with IP", endpoint: googleDoH8888, wantHost: "8.8.8.8", wantPort: "443"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -187,12 +187,12 @@ func TestEndpointToAddr(t *testing.T) {
 		wantType string
 		wantPort int
 	}{
-		{name: "UDP plain", endpoint: "127.0.0.1:53", network: UDP, wantType: "*net.UDPAddr", wantPort: 53},
-		{name: "TCP plain", endpoint: "127.0.0.1:53", network: TCP, wantType: "*net.TCPAddr", wantPort: 53},
-		{name: "DoT", endpoint: "127.0.0.1:853", network: TCPTLS, wantType: "*net.TCPAddr", wantPort: 853},
-		{name: "DoH URL", endpoint: "https://8.8.8.8/dns-query", network: DOH, wantType: "*net.TCPAddr", wantPort: 443},
-		{name: "DoH3 URL", endpoint: "https://8.8.8.8/dns-query", network: DOH3, wantType: "*net.TCPAddr", wantPort: 443},
-		{name: "DoQ", endpoint: "127.0.0.1:853", network: DOQ, wantType: "*net.UDPAddr", wantPort: 853},
+		{name: "UDP plain", endpoint: localDNS53, network: UDP, wantType: addrTypeUDP, wantPort: 53},
+		{name: "TCP plain", endpoint: localDNS53, network: TCP, wantType: addrTypeTCP, wantPort: 53},
+		{name: "DoT", endpoint: localDNS853, network: TCPTLS, wantType: addrTypeTCP, wantPort: 853},
+		{name: "DoH URL", endpoint: googleDoH8888, network: DOH, wantType: addrTypeTCP, wantPort: 443},
+		{name: "DoH3 URL", endpoint: googleDoH8888, network: DOH3, wantType: addrTypeTCP, wantPort: 443},
+		{name: testCaseDoQ, endpoint: localDNS853, network: DOQ, wantType: addrTypeUDP, wantPort: 853},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -317,7 +317,7 @@ func TestTransportPool_YieldAndReuse(t *testing.T) {
 
 // TestTransportPool_YieldNil verifies that Yield(nil) is a safe no-op.
 func TestTransportPool_YieldNil(t *testing.T) {
-	tr := NewTransport("127.0.0.1:53")
+	tr := NewTransport(localDNS53)
 	require.NotPanics(t, func() {
 		tr.Yield(nil)
 	})

@@ -456,7 +456,7 @@ func TestDoQClientTXTRecord(t *testing.T) {
 		msg.SetReply(r)
 		msg.Answer = append(msg.Answer, &dns.TXT{
 			Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 300},
-			Txt: []string{"v=spf1 include:example.com ~all"},
+			Txt: []string{spfRecord},
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
@@ -477,7 +477,7 @@ func TestDoQClientTXTRecord(t *testing.T) {
 
 	txt, ok := resp.Answer[0].(*dns.TXT)
 	require.True(t, ok)
-	require.Equal(t, []string{"v=spf1 include:example.com ~all"}, txt.Txt)
+	require.Equal(t, []string{spfRecord}, txt.Txt)
 }
 
 // TestDoQClientConcurrentRequests verifies that the DoQ client handles multiple
@@ -528,17 +528,17 @@ func TestDoQClientConcurrentRequests(t *testing.T) {
 // TestDoQClientEndpointAndNet verifies that the DoQ client returns the correct
 // endpoint address and network type.
 func TestDoQClientEndpointAndNet(t *testing.T) {
-	c := NewDoQClient("dns.example.com:853")
+	c := NewDoQClient(exampleDoTAddr)
 	defer closeDoQClient(t, c)
 
-	require.Equal(t, "dns.example.com:853", c.Endpoint())
+	require.Equal(t, exampleDoTAddr, c.Endpoint())
 	require.Equal(t, DOQ, c.Net())
 }
 
 // TestDoQClientSetTLSConfig verifies that SetTLSConfig updates the transport
 // without panicking and enforces TLS 1.3 minimum and the DoQ ALPN token.
 func TestDoQClientSetTLSConfig(t *testing.T) {
-	c := NewDoQClient("dns.example.com:853")
+	c := NewDoQClient(exampleDoTAddr)
 	defer closeDoQClient(t, c)
 
 	// Should not panic with nil.
@@ -548,7 +548,7 @@ func TestDoQClientSetTLSConfig(t *testing.T) {
 	// Should not panic with a real config.
 	c.SetTLSConfig(&tls.Config{
 		MinVersion: tls.VersionTLS12, // should be upgraded to TLS 1.3
-		ServerName: "dns.example.com",
+		ServerName: exampleDoTHost,
 	})
 	require.Equal(t, DOQ, c.Net())
 
@@ -563,7 +563,7 @@ func TestDoQClientSetTLSConfig(t *testing.T) {
 
 // TestDoQClientTLSMinVersion verifies TLS 1.3 is enforced as required by QUIC.
 func TestDoQClientTLSMinVersion(t *testing.T) {
-	c := NewDoQClient("dns.example.com:853")
+	c := NewDoQClient(exampleDoTAddr)
 	defer closeDoQClient(t, c)
 	dc, ok := c.(*doqClient)
 	require.True(t, ok)
@@ -695,13 +695,13 @@ func TestSetupDoQConfig(t *testing.T) {
 		{
 			name:         "single-doq-endpoint",
 			input:        "fanout . quic://dns.example.com:853",
-			expectedURLs: []string{"dns.example.com:853"},
+			expectedURLs: []string{exampleDoTAddr},
 			expectedNets: []string{DOQ},
 		},
 		{
 			name:         "doq-default-port",
 			input:        "fanout . quic://dns.example.com",
-			expectedURLs: []string{"dns.example.com:853"},
+			expectedURLs: []string{exampleDoTAddr},
 			expectedNets: []string{DOQ},
 		},
 		{
@@ -712,9 +712,9 @@ func TestSetupDoQConfig(t *testing.T) {
 		},
 		{
 			name:         "mixed-all-protocols",
-			input:        "fanout . 127.0.0.1 https://dns.google/dns-query h3://cloudflare-dns.com/dns-query quic://dns.example.com:853",
-			expectedURLs: []string{"127.0.0.1:53", "https://dns.google/dns-query", "https://cloudflare-dns.com/dns-query", "dns.example.com:853"},
-			expectedNets: []string{"udp", DOH, DOH3, DOQ},
+			input:        corefileAllDoHDoQ,
+			expectedURLs: []string{localDNS53, dnsGoogleDoHURL, cfDoHURL, exampleDoTAddr},
+			expectedNets: []string{UDP, DOH, DOH3, DOQ},
 		},
 	}
 
@@ -794,9 +794,9 @@ func TestSetupDoQCaseInsensitive(t *testing.T) {
 		name  string
 		input string
 	}{
-		{"lowercase", "fanout . quic://dns.google:853"},
-		{"uppercase", "fanout . QUIC://dns.google:853"},
-		{"mixedcase", "fanout . Quic://DNS.Google:853"},
+		{testCaseLowercase, "fanout . quic://dns.google:853"},
+		{testCaseUppercase, "fanout . QUIC://dns.google:853"},
+		{testCaseMixedcase, "fanout . Quic://DNS.Google:853"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -830,23 +830,23 @@ func TestSetupDoQMixedWithTLS(t *testing.T) {
 // TestSetupAllFourTransports verifies that plain, DoH, DoH3, and DoQ endpoints can
 // all be configured together in a single fanout stanza.
 func TestSetupAllFourTransports(t *testing.T) {
-	input := "fanout . 127.0.0.1 https://dns.google/dns-query h3://cloudflare-dns.com/dns-query quic://dns.example.com:853"
+	input := corefileAllDoHDoQ
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
 
 	require.NoError(t, err)
 	require.Len(t, f.clients, 4)
 
-	require.Equal(t, "127.0.0.1:53", f.clients[0].Endpoint())
-	require.Equal(t, "udp", f.clients[0].Net())
+	require.Equal(t, localDNS53, f.clients[0].Endpoint())
+	require.Equal(t, UDP, f.clients[0].Net())
 
-	require.Equal(t, "https://dns.google/dns-query", f.clients[1].Endpoint())
+	require.Equal(t, dnsGoogleDoHURL, f.clients[1].Endpoint())
 	require.Equal(t, DOH, f.clients[1].Net())
 
-	require.Equal(t, "https://cloudflare-dns.com/dns-query", f.clients[2].Endpoint())
+	require.Equal(t, cfDoHURL, f.clients[2].Endpoint())
 	require.Equal(t, DOH3, f.clients[2].Net())
 
-	require.Equal(t, "dns.example.com:853", f.clients[3].Endpoint())
+	require.Equal(t, exampleDoTAddr, f.clients[3].Endpoint())
 	require.Equal(t, DOQ, f.clients[3].Net())
 }
 
@@ -1032,10 +1032,10 @@ func TestDoQDoesNotBreakExistingSetup(t *testing.T) {
 		expectedNet string
 		expectedN   int
 	}{
-		{name: "plain-udp", input: "fanout . 127.0.0.1", expectedNet: "udp", expectedN: 1},
-		{name: "plain-tcp", input: "fanout . 127.0.0.1 {\nnetwork tcp\n}", expectedNet: "tcp", expectedN: 1},
-		{name: "doh-only", input: "fanout . https://dns.google/dns-query", expectedNet: "udp", expectedN: 1},
-		{name: "doh3-only", input: "fanout . h3://dns.google/dns-query", expectedNet: "udp", expectedN: 1},
+		{name: "plain-udp", input: corefileUDPLocal, expectedNet: UDP, expectedN: 1},
+		{name: "plain-tcp", input: corefileTCPLocal, expectedNet: "tcp", expectedN: 1},
+		{name: testCaseDohOnly, input: corefileDoHGoogle, expectedNet: UDP, expectedN: 1},
+		{name: testCaseDoH3Only, input: corefileDoH3Google, expectedNet: UDP, expectedN: 1},
 	}
 
 	for _, tc := range tests {

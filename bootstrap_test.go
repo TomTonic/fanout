@@ -186,7 +186,7 @@ func TestBootstrapECSIPv6(t *testing.T) {
 // path for upstream addresses specified by IP (e.g. tls://1.2.3.4:853) and
 // exercises the net.ParseIP short-circuit in resolveHost.
 func TestBootstrapResolveHostPassthroughIP(t *testing.T) {
-	b := newBootstrapConfig([]string{"127.0.0.1:53"})
+	b := newBootstrapConfig([]string{localDNS53})
 	resolved, hostname, err := b.resolveHost(context.Background(), "1.2.3.4:853")
 	require.NoError(t, err)
 	require.Equal(t, "1.2.3.4:853", resolved)
@@ -232,8 +232,8 @@ func TestBootstrapResolveHostResolution(t *testing.T) {
 		hostport string
 		expected string
 	}{
-		{"A record", dns.TypeA, "10.0.0.1", "dns.example.com:853", "10.0.0.1:853"},
-		{"AAAA fallback", dns.TypeAAAA, "2001:db8::1", "dns.example.com:443", "[2001:db8::1]:443"},
+		{"A record", dns.TypeA, "10.0.0.1", exampleDoTAddr, "10.0.0.1:853"},
+		{"AAAA fallback", dns.TypeAAAA, "2001:db8::1", "dns.example.com:443", ipv6Bracket443},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -470,7 +470,7 @@ func TestParseECSAutoDetect(t *testing.T) {
 // IPv4 subnet when dialing to localhost. This exercises the UDP-dial approach
 // for determining the outgoing IP without sending any packets.
 func TestDetectLocalSubnet(t *testing.T) {
-	subnet, err := detectLocalSubnet("127.0.0.1:53")
+	subnet, err := detectLocalSubnet(localDNS53)
 	require.NoError(t, err)
 	require.NotNil(t, subnet)
 	ones, bits := subnet.Mask.Size()
@@ -484,7 +484,7 @@ func TestDetectLocalSubnet(t *testing.T) {
 // TestDetectLocalSubnetFromAnyFallsBack verifies that ECS auto-detection tries
 // the next bootstrap resolver when an earlier address cannot be used.
 func TestDetectLocalSubnetFromAnyFallsBack(t *testing.T) {
-	subnet, err := detectLocalSubnetFromAny([]string{"invalid-address", "127.0.0.1:53"})
+	subnet, err := detectLocalSubnetFromAny([]string{"invalid-address", localDNS53})
 	require.NoError(t, err)
 	require.NotNil(t, subnet)
 }

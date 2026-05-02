@@ -333,7 +333,7 @@ func TestDoHClientSetTLSConfig(t *testing.T) {
 	// Should not panic with a real config.
 	c.SetTLSConfig(&tls.Config{
 		MinVersion: tls.VersionTLS13,
-		ServerName: "dns.google",
+		ServerName: dnsGoogleHost,
 	})
 	require.Equal(t, DOH, c.Net())
 }
@@ -347,14 +347,14 @@ func TestDoHClientSetTLSConfigPreservesCallerTLSFloor(t *testing.T) {
 	require.True(t, ok)
 	defer func() { require.NoError(t, dc.Close()) }()
 
-	strict := &tls.Config{MinVersion: tls.VersionTLS13, ServerName: "dns.google"}
+	strict := &tls.Config{MinVersion: tls.VersionTLS13, ServerName: dnsGoogleHost}
 	c.SetTLSConfig(strict)
 	tr, ok := dc.httpClient.Transport.(*http.Transport)
 	require.True(t, ok)
 	require.Equal(t, uint16(tls.VersionTLS13), tr.TLSClientConfig.MinVersion)
 	require.Equal(t, uint16(tls.VersionTLS13), strict.MinVersion)
 
-	legacy := &tls.Config{MinVersion: tls.VersionTLS10, ServerName: "dns.google"} //nolint:gosec // test verifies that SetTLSConfig raises weak caller settings to TLS 1.2
+	legacy := &tls.Config{MinVersion: tls.VersionTLS10, ServerName: dnsGoogleHost} //nolint:gosec // test verifies that SetTLSConfig raises weak caller settings to TLS 1.2
 	c.SetTLSConfig(legacy)
 	tr, ok = dc.httpClient.Transport.(*http.Transport)
 	require.True(t, ok)
@@ -552,15 +552,15 @@ func TestDoHClientCustomTLS(t *testing.T) { //nolint:funlen // test helper setup
 		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
-		DNSNames:     []string{"localhost"},
+		DNSNames:     []string{localhostName},
 	}
 	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	require.NoError(t, err)
 
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: pemTypeCert, Bytes: certDER})
 	keyDER, err := x509.MarshalECPrivateKey(key)
 	require.NoError(t, err)
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: pemTypeECKey, Bytes: keyDER})
 
 	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
 	require.NoError(t, err)
@@ -629,18 +629,18 @@ func TestSetupDoHConfig(t *testing.T) {
 	}{
 		{
 			name:         "single-doh-endpoint",
-			input:        "fanout . https://dns.google/dns-query",
-			expectedURLs: []string{"https://dns.google/dns-query"},
+			input:        corefileDoHGoogle,
+			expectedURLs: []string{dnsGoogleDoHURL},
 		},
 		{
 			name:         "multiple-doh-endpoints",
 			input:        "fanout . https://dns.google/dns-query https://cloudflare-dns.com/dns-query",
-			expectedURLs: []string{"https://dns.google/dns-query", "https://cloudflare-dns.com/dns-query"},
+			expectedURLs: []string{dnsGoogleDoHURL, cfDoHURL},
 		},
 		{
 			name:         "mixed-doh-and-plain",
 			input:        "fanout . 127.0.0.1 https://dns.google/dns-query",
-			expectedURLs: []string{"127.0.0.1:53", "https://dns.google/dns-query"},
+			expectedURLs: []string{localDNS53, dnsGoogleDoHURL},
 		},
 	}
 
@@ -804,7 +804,7 @@ func TestDoHClientTXTRecord(t *testing.T) {
 		msg.SetReply(r)
 		msg.Answer = append(msg.Answer, &dns.TXT{
 			Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 300},
-			Txt: []string{"v=spf1 include:example.com ~all"},
+			Txt: []string{spfRecord},
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
@@ -824,7 +824,7 @@ func TestDoHClientTXTRecord(t *testing.T) {
 
 	txt, ok := resp.Answer[0].(*dns.TXT)
 	require.True(t, ok)
-	require.Equal(t, []string{"v=spf1 include:example.com ~all"}, txt.Txt)
+	require.Equal(t, []string{spfRecord}, txt.Txt)
 }
 
 // TestSetupMixedDoHAndPlainParsing verifies that the parser correctly separates DoH URLs
@@ -955,9 +955,9 @@ func TestSetupDoHConfigCaseInsensitive(t *testing.T) {
 		name  string
 		input string
 	}{
-		{"lowercase", "fanout . https://dns.google/dns-query"},
-		{"uppercase", "fanout . HTTPS://dns.google/dns-query"},
-		{"mixedcase", "fanout . Https://DNS.Google/dns-query"},
+		{testCaseLowercase, "fanout . https://dns.google/dns-query"},
+		{testCaseUppercase, "fanout . HTTPS://dns.google/dns-query"},
+		{testCaseMixedcase, "fanout . Https://DNS.Google/dns-query"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -979,9 +979,9 @@ func TestDoHParseDoesNotBreakExistingSetup(t *testing.T) {
 		expectedNet string
 		expectedN   int
 	}{
-		{name: "plain-udp", input: "fanout . 127.0.0.1", expectedNet: "udp", expectedN: 1},
-		{name: "plain-tcp", input: "fanout . 127.0.0.1 {\nnetwork tcp\n}", expectedNet: "tcp", expectedN: 1},
-		{name: "two-hosts", input: "fanout . 127.0.0.1 127.0.0.2", expectedNet: "udp", expectedN: 2},
+		{name: "plain-udp", input: corefileUDPLocal, expectedNet: UDP, expectedN: 1},
+		{name: "plain-tcp", input: corefileTCPLocal, expectedNet: "tcp", expectedN: 1},
+		{name: "two-hosts", input: "fanout . 127.0.0.1 127.0.0.2", expectedNet: UDP, expectedN: 2},
 	}
 
 	for _, tc := range tests {
