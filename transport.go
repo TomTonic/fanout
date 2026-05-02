@@ -151,7 +151,7 @@ func (t *transportImpl) dial(ctx context.Context, c *dns.Client) (*dns.Conn, err
 	}
 	network := c.Net
 	if network == "" {
-		network = "udp"
+		network = UDP
 	}
 	var conn = new(dns.Conn)
 	var err error
