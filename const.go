@@ -20,6 +20,7 @@ package fanout
 import "time"
 
 const (
+	pluginName           = "fanout"
 	maxIPCount           = 100
 	maxLoadFactor        = 100
 	minLoadFactor        = 1

@@ -39,8 +39,13 @@ import (
 	"github.com/pkg/errors"
 )
 
+const (
+	devVersion      = "(devel)"
+	attemptCountKey = "attempt-count"
+)
+
 func init() {
-	caddy.RegisterPlugin("fanout", caddy.Plugin{
+	caddy.RegisterPlugin(pluginName, caddy.Plugin{
 		ServerType: "dns",
 		Action:     setup,
 	})
@@ -54,13 +59,13 @@ type buildInfo struct {
 }
 
 func readBuildInfo() buildInfo {
-	bi := buildInfo{version: "(devel)"}
+	bi := buildInfo{version: devVersion}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		bi.version = "(unknown)"
 		return bi
 	}
-	if info.Main.Version != "" && info.Main.Version != "(devel)" {
+	if info.Main.Version != "" && info.Main.Version != devVersion {
 		bi.version = info.Main.Version
 	}
 	for _, s := range info.Settings {
@@ -97,11 +102,11 @@ func (b buildInfo) String() string {
 func setup(c *caddy.Controller) error {
 	f, err := parseFanout(c)
 	if err != nil {
-		return plugin.Error("fanout", err)
+		return plugin.Error(pluginName, err)
 	}
 	l := len(f.clients)
 	if l > maxIPCount {
-		return plugin.Error("fanout", errors.Errorf("more than %d TOs configured: %d", maxIPCount, l))
+		return plugin.Error(pluginName, errors.Errorf("more than %d TOs configured: %d", maxIPCount, l))
 	}
 
 	dnsserver.GetConfig(c).AddPlugin(func(next plugin.Handler) plugin.Handler {

@@ -129,7 +129,7 @@ func (b *bootstrapConfig) queryBootstrap(ctx context.Context, host string, qtype
 	}
 
 	client := &dns.Client{
-		Net:     "udp",
+		Net:     UDP,
 		Timeout: dialTimeout,
 	}
 

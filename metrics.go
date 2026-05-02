@@ -28,6 +28,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+const (
+	metricLabelTo    = "to"
+	metricLabelError = "error"
+	metricLabelRcode = "rcode"
+)
+
 type requestErrorClass string
 
 const (
@@ -48,43 +54,43 @@ const (
 var (
 	RequestCount = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: plugin.Namespace,
-		Subsystem: "fanout",
+		Subsystem: pluginName,
 		Name:      "request_count_total",
 		Help:      "Number of request attempts started per upstream.",
-	}, []string{"to"})
+	}, []string{metricLabelTo})
 	ErrorCount = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: plugin.Namespace,
-		Subsystem: "fanout",
+		Subsystem: pluginName,
 		Name:      "request_error_count_total",
 		Help:      "Number of request attempts that ended with an upstream error, grouped by bounded error class.",
-	}, []string{"error", "to"})
+	}, []string{metricLabelError, metricLabelTo})
 	CancelCount = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: plugin.Namespace,
-		Subsystem: "fanout",
+		Subsystem: pluginName,
 		Name:      "request_cancel_count_total",
 		Help:      "Number of request attempts that were canceled locally before a final upstream outcome was received.",
-	}, []string{"to"})
+	}, []string{metricLabelTo})
 	SuccessCount = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: plugin.Namespace,
-		Subsystem: "fanout",
+		Subsystem: pluginName,
 		Name:      "request_success_count_total",
 		Help:      "Number of request attempts that completed with a valid DNS response per upstream.",
-	}, []string{"to"})
+	}, []string{metricLabelTo})
 	WinCount = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: plugin.Namespace,
-		Subsystem: "fanout",
+		Subsystem: pluginName,
 		Name:      "response_win_count_total",
 		Help:      "Number of selected upstream responses that fanout returned downstream per upstream.",
-	}, []string{"to"})
+	}, []string{metricLabelTo})
 	RcodeCount = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: plugin.Namespace,
-		Subsystem: "fanout",
+		Subsystem: pluginName,
 		Name:      "response_rcode_count_total",
 		Help:      "Number of responses per response code per upstream.",
-	}, []string{"rcode", "to"})
+	}, []string{metricLabelRcode, metricLabelTo})
 	RequestDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: plugin.Namespace,
-		Subsystem: "fanout",
+		Subsystem: pluginName,
 		Name:      "request_duration_seconds",
 		Buckets:   plugin.TimeBuckets,
 		Help:      "Histogram of the time request attempts with a valid DNS response took.",

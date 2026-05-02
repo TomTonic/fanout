@@ -66,7 +66,7 @@ type Fanout struct {
 func New() *Fanout {
 	return &Fanout{
 		tlsConfig:             new(tls.Config),
-		net:                   "udp",
+		net:                   UDP,
 		Attempts:              3,
 		Timeout:               defaultTimeout,
 		ExcludeDomains:        NewDomain(),
@@ -91,7 +91,7 @@ func (f *Fanout) addClient(p Client) {
 
 // Name implements plugin.Handler.
 func (f *Fanout) Name() string {
-	return "fanout"
+	return pluginName
 }
 
 // ServeDNS implements plugin.Handler.
