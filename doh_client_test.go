@@ -851,7 +851,7 @@ func TestSetupMixedDoHAndPlainParsing(t *testing.T) {
 // TestSetupDoHOnlyNoPlain verifies that a configuration with only DoH endpoints
 // and no plain hosts parses correctly.
 func TestSetupDoHOnlyNoPlain(t *testing.T) {
-	input := "fanout . https://dns.google/dns-query"
+	input := corefileDoHGoogle
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
 
@@ -979,8 +979,8 @@ func TestDoHParseDoesNotBreakExistingSetup(t *testing.T) {
 		expectedNet string
 		expectedN   int
 	}{
-		{name: "plain-udp", input: corefileUDPLocal, expectedNet: UDP, expectedN: 1},
-		{name: "plain-tcp", input: corefileTCPLocal, expectedNet: "tcp", expectedN: 1},
+		{name: testCasePlainUDP, input: corefileUDPLocal, expectedNet: UDP, expectedN: 1},
+		{name: testCasePlainTCP, input: corefileTCPLocal, expectedNet: TCP, expectedN: 1},
 		{name: "two-hosts", input: "fanout . 127.0.0.1 127.0.0.2", expectedNet: UDP, expectedN: 2},
 	}
 

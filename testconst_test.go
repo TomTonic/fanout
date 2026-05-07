@@ -69,8 +69,13 @@ const (
 	testCaseMixedcase = "mixedcase"
 	testCaseDohOnly   = "doh-only"
 	testCaseDoH3Only  = "doh3-only"
+	testCasePlainUDP  = "plain-udp"
+	testCasePlainTCP  = "plain-tcp"
 	testCaseUDP       = "UDP"
 	testCaseTCP       = "TCP"
 	testCaseDoT       = "DoT"
 	testCaseDoQ       = "DoQ"
+
+	// Additional DNS endpoint strings used in setup tests.
+	localDNS53Alt = "127.0.0.2:53"
 )

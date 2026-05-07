@@ -265,7 +265,7 @@ func TestLogIntermediateFailure_DeadlineExceededIncludesContextError(t *testing.
 	state := &request.Request{W: &test.ResponseWriter{}, Req: req}
 	err := withRequestErrorClass(errors.New("read tcp 127.0.0.1:1->1.1.1.1:53: i/o timeout"), requestErrorResponseRead)
 
-	f.logIntermediateFailure(ctx, loggingClientStub{endpoint: "1.1.1.1:53", network: TCP}, state, 2, err)
+	f.logIntermediateFailure(ctx, loggingClientStub{endpoint: cfPlain, network: TCP}, state, 2, err)
 
 	output := buf.String()
 	require.Contains(t, output, "upstream failure:")
