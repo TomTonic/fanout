@@ -39,7 +39,7 @@ func TestSimple_Pick(t *testing.T) {
 			picksCount: 7,
 			expected:   []string{"a", "b", "c", "d", "e", "f", "g"},
 		},
-		"pick_some": {
+		pickSome: {
 			values:     []string{"a", "b", "c", "d", "e", "f", "g"},
 			picksCount: 3,
 			expected:   []string{"a", "b", "c"},

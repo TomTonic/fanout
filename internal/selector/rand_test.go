@@ -22,6 +22,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+const pickSome = "pick_some"
+
 // TestWeightedRand_Pick verifies the WeightedRand selector picks elements without replacement.
 // Since rand/v2 uses a non-seedable global source, we verify set membership rather than order.
 func TestWeightedRand_Pick(t *testing.T) {
@@ -33,7 +35,7 @@ func TestWeightedRand_Pick(t *testing.T) {
 	}{
 		"all_same_weight":      {[]string{"a", "b", "c", "d", "e"}, []int{100, 100, 100, 100, 100}, 5, 0},
 		"all_different_weight": {[]string{"a", "b", "c"}, []int{100, 70, 10}, 3, 0},
-		"pick_some":            {[]string{"a", "b", "c", "d", "e"}, []int{100, 100, 100, 100, 100}, 3, 0},
+		pickSome:               {[]string{"a", "b", "c", "d", "e"}, []int{100, 100, 100, 100, 100}, 3, 0},
 		"more_than_available":  {[]string{"a", "b", "c"}, []int{70, 10, 100}, 4, 1},
 	}
 	for name, tc := range testCases {

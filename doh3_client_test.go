@@ -838,8 +838,8 @@ func TestDoH3DoesNotBreakExistingSetup(t *testing.T) {
 		expectedNet string
 		expectedN   int
 	}{
-		{name: "plain-udp", input: corefileUDPLocal, expectedNet: UDP, expectedN: 1},
-		{name: "plain-tcp", input: corefileTCPLocal, expectedNet: "tcp", expectedN: 1},
+		{name: testCasePlainUDP, input: corefileUDPLocal, expectedNet: UDP, expectedN: 1},
+		{name: testCasePlainTCP, input: corefileTCPLocal, expectedNet: TCP, expectedN: 1},
 		{name: testCaseDohOnly, input: corefileDoHGoogle, expectedNet: UDP, expectedN: 1},
 	}
 

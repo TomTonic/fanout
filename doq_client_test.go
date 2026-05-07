@@ -76,15 +76,15 @@ func newDoQTestServer(t *testing.T, handler dns.HandlerFunc) *doqTestServer { //
 		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
-		DNSNames:     []string{"localhost"},
+		DNSNames:     []string{localhostName},
 	}
 	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	require.NoError(t, err)
 
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: pemTypeCert, Bytes: certDER})
 	keyDER, err := x509.MarshalECPrivateKey(key)
 	require.NoError(t, err)
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: pemTypeECKey, Bytes: keyDER})
 
 	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
 	require.NoError(t, err)
@@ -932,15 +932,15 @@ func newRawDoQTestServer(t *testing.T, streamHandler func(s *quic.Stream)) *rawD
 		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
-		DNSNames:     []string{"localhost"},
+		DNSNames:     []string{localhostName},
 	}
 	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	require.NoError(t, err)
 
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: pemTypeCert, Bytes: certDER})
 	keyDER, err := x509.MarshalECPrivateKey(key)
 	require.NoError(t, err)
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: pemTypeECKey, Bytes: keyDER})
 
 	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
 	require.NoError(t, err)
@@ -1032,8 +1032,8 @@ func TestDoQDoesNotBreakExistingSetup(t *testing.T) {
 		expectedNet string
 		expectedN   int
 	}{
-		{name: "plain-udp", input: corefileUDPLocal, expectedNet: UDP, expectedN: 1},
-		{name: "plain-tcp", input: corefileTCPLocal, expectedNet: "tcp", expectedN: 1},
+		{name: testCasePlainUDP, input: corefileUDPLocal, expectedNet: UDP, expectedN: 1},
+		{name: testCasePlainTCP, input: corefileTCPLocal, expectedNet: TCP, expectedN: 1},
 		{name: testCaseDohOnly, input: corefileDoHGoogle, expectedNet: UDP, expectedN: 1},
 		{name: testCaseDoH3Only, input: corefileDoH3Google, expectedNet: UDP, expectedN: 1},
 	}
