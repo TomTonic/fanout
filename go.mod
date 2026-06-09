@@ -1,10 +1,10 @@
 module github.com/TomTonic/fanout
 
-go 1.25.11
+go 1.26.4
 
 require (
 	github.com/coredns/caddy v1.1.4
-	github.com/coredns/coredns v1.14.3
+	github.com/coredns/coredns v1.14.4
 	github.com/dnstap/golang-dnstap v0.4.0
 	github.com/miekg/dns v1.1.72
 	github.com/opentracing/opentracing-go v1.2.0
