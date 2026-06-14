@@ -78,4 +78,8 @@ const (
 
 	// Additional DNS endpoint strings used in setup tests.
 	localDNS53Alt = "127.0.0.2:53"
+
+	// Stub upstream endpoint strings used in concurrency/metric tests.
+	stubUpstreamA = "a.invalid:53"
+	stubUpstreamB = "b.invalid:53"
 )

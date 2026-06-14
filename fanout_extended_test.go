@@ -31,7 +31,9 @@ import (
 	"github.com/coredns/caddy"
 	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/plugin/test"
+	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 )
@@ -44,8 +46,8 @@ func TestConfigSummary(t *testing.T) {
 	f.From = "."
 	f.net = UDP
 	f.Timeout = 2 * time.Second
-	f.AddClient(metricsClientStub{endpoint: "a.invalid:53", network: UDP})
-	f.AddClient(metricsClientStub{endpoint: "b.invalid:53", network: UDP})
+	f.AddClient(metricsClientStub{endpoint: stubUpstreamA, network: UDP})
+	f.AddClient(metricsClientStub{endpoint: stubUpstreamB, network: UDP})
 
 	summary := f.configSummary()
 	require.Contains(t, summary, "from=.")
@@ -63,6 +65,107 @@ func TestConfigSummary(t *testing.T) {
 	require.Contains(t, summary, "attempts=inf")
 	require.Contains(t, summary, "race=true")
 	require.Contains(t, summary, "policy=weighted-random")
+}
+
+// TestServeDNS_DoesNotMutateSharedRequest verifies the read-only contract on the
+// shared request message: all fan-out workers share the same *dns.Msg, so no
+// Client may mutate it. The test fans out to two upstreams and asserts the
+// request message is byte-identical before and after ServeDNS.
+func TestServeDNS_DoesNotMutateSharedRequest(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	f := New()
+	f.From = "."
+	f.Attempts = 1
+	readOnly := func(_ context.Context, r *request.Request) (*dns.Msg, error) {
+		// Emulate real clients: read fields and pack, never mutate.
+		_, _ = r.Req.Pack()
+		_ = r.Req.Id
+		resp := new(dns.Msg)
+		resp.SetReply(r.Req)
+		return resp, nil
+	}
+	f.AddClient(metricsClientStub{endpoint: stubUpstreamA, network: UDP, request: readOnly})
+	f.AddClient(metricsClientStub{endpoint: stubUpstreamB, network: UDP, request: readOnly})
+
+	req := new(dns.Msg)
+	req.SetQuestion("example.org.", dns.TypeA)
+	req.Id = 0x4242
+	req.RecursionDesired = true
+	before, err := req.Pack()
+	require.NoError(t, err)
+
+	_, err = f.ServeDNS(context.Background(), &test.ResponseWriter{}, req)
+	require.NoError(t, err)
+
+	after, err := req.Pack()
+	require.NoError(t, err)
+	require.Equal(t, before, after, "fan-out must not mutate the shared request message")
+}
+
+// nilClientSelector and nilClientPolicy model a (currently impossible) selection
+// policy that returns nil clients, used to verify the producer's nil guard.
+type nilClientSelector struct{}
+
+func (nilClientSelector) Pick() Client { return nil }
+
+type nilClientPolicy struct{}
+
+func (nilClientPolicy) selector([]Client) clientSelector { return nilClientSelector{} }
+
+// TestServeDNS_NilClientPickDoesNotPanic verifies that a policy yielding a nil
+// Client is skipped by the producer instead of panicking in a worker. The query
+// ends as a no_response failure because no upstream is actually contacted.
+func TestServeDNS_NilClientPickDoesNotPanic(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	f := New()
+	f.From = "."
+	f.Attempts = 1
+	f.AddClient(metricsClientStub{endpoint: "unused.invalid:53", network: UDP, request: func(context.Context, *request.Request) (*dns.Msg, error) {
+		return nil, errors.New("nil-pick client must never be invoked")
+	}})
+	f.ServerSelectionPolicy = nilClientPolicy{}
+
+	req := new(dns.Msg)
+	req.SetQuestion("example.org.", dns.TypeA)
+	require.NotPanics(t, func() {
+		rcode, err := f.ServeDNS(context.Background(), &test.ResponseWriter{}, req)
+		require.Equal(t, dns.RcodeServerFailure, rcode)
+		require.Error(t, err)
+	})
+}
+
+// TestServeDNS_CancelsLosingUpstreamsPromptly verifies that once a winner is
+// selected, the still-running losing upstream is cancelled immediately rather
+// than lingering until the (here deliberately long) timeout elapses.
+func TestServeDNS_CancelsLosingUpstreamsPromptly(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	f := New()
+	f.From = "."
+	f.Attempts = 1
+	f.Timeout = 30 * time.Second // the loser would block far past the test budget if not cancelled
+
+	loserCancelled := make(chan struct{})
+	f.AddClient(metricsClientStub{endpoint: "winner.invalid:53", network: UDP, request: func(_ context.Context, r *request.Request) (*dns.Msg, error) {
+		resp := new(dns.Msg)
+		resp.SetReply(r.Req)
+		return resp, nil
+	}})
+	f.AddClient(metricsClientStub{endpoint: "loser.invalid:53", network: UDP, request: func(ctx context.Context, _ *request.Request) (*dns.Msg, error) {
+		<-ctx.Done()
+		close(loserCancelled)
+		return nil, ctx.Err()
+	}})
+
+	req := new(dns.Msg)
+	req.SetQuestion("example.org.", dns.TypeA)
+	_, err := f.ServeDNS(context.Background(), &test.ResponseWriter{}, req)
+	require.NoError(t, err)
+
+	select {
+	case <-loserCancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("losing upstream was not cancelled promptly after a winner was selected")
+	}
 }
 
 // ---------- 2. ServeDNS: Race mode, Domain mismatch, FormatError ----------
