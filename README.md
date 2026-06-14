@@ -137,6 +137,10 @@ fanout FROM TO... {
 
 If monitoring is enabled (via the *prometheus* plugin) then the following metrics are exported:
 
+#### Per-upstream metrics
+
+These count individual request *attempts* sent to each upstream. Because fanout queries several upstreams in parallel per incoming query, the sum of these counters is larger than the number of downstream queries.
+
 * `coredns_fanout_request_count_total{to}` — request attempt count per upstream, including attempts that fail before a DNS response is received.
 * `coredns_fanout_request_error_count_total{to, error}` — request attempt count per upstream and bounded upstream error class.
 * `coredns_fanout_request_cancel_count_total{to}` — request attempt count per upstream that fanout canceled locally before a final upstream outcome was received.
@@ -144,6 +148,17 @@ If monitoring is enabled (via the *prometheus* plugin) then the following metric
 * `coredns_fanout_response_win_count_total{to}` — number of times an upstream's response was the one fanout selected and returned downstream. Because fanout queries multiple upstreams in parallel, several may succeed, but only one response is written to the client per incoming query. A win is counted for any selected response, including non-success RCODEs when no better response was available.
 * `coredns_fanout_response_rcode_count_total{to, rcode}` — count of returned RCODEs per upstream.
 * `coredns_fanout_request_duration_seconds{to}` — duration of request attempts that completed with a valid DNS response.
+
+#### Downstream (query-level) metrics
+
+These count whole incoming queries, regardless of how many upstreams each one fanned out to. They answer "did fanout serve the client?", which the per-upstream counters alone cannot — especially under the `weighted-random` policy, where not every upstream is queried per request.
+
+* `coredns_fanout_query_count_total` — number of incoming queries fanout handled (queries matching the configured **FROM** zone; queries passed to the next plugin are not counted).
+* `coredns_fanout_query_failure_count_total{reason}` — number of incoming queries fanout answered with a failure instead of a valid upstream response, grouped by bounded `reason`:
+  * `no_response` — no upstream produced a result before the deadline (timeout or cancellation); fanout returns SERVFAIL.
+  * `upstream_error` — every upstream attempt ended with an error; fanout returns SERVFAIL.
+  * `format_error` — the selected upstream response did not match the question; fanout returns FORMERR.
+  * `write_failed` — writing the selected response back to the client failed.
 
 Where `to` is one of the upstream servers (**TO** from the config), `rcode` is the returned RCODE
 from the upstream, and `error` is one of the bounded classes used by fanout
@@ -155,6 +170,11 @@ The counters are designed to follow a simple accounting model per upstream:
 * `request_success_count_total = response_rcode_count_total` summed over all `rcode` labels
 * `response_win_count_total <= request_success_count_total` (because multiple upstreams may succeed per query but only one is selected)
 
+At the query level:
+
+* `query_count_total = (queries served downstream) + query_failure_count_total` summed over all `reason` labels
+* `sum(response_win_count_total) over all upstreams = query_count_total - query_failure_count_total{reason="no_response"} - query_failure_count_total{reason="upstream_error"}` (every served or FORMERR/`write_failed` query selected exactly one upstream response)
+
 ### Practical interpretation
 
 Use these metrics to identify the best upstream in your environment:
@@ -163,6 +183,7 @@ Use these metrics to identify the best upstream in your environment:
 * An upstream with high success but low win rate works fine but is slower than competing upstreams.
 * An upstream with high `SERVFAIL` rcode count responds, but cannot resolve queries — check the server itself.
 * Compare win rates across upstreams to find the fastest and most reliable one.
+* Track `rate(coredns_fanout_query_failure_count_total[5m]) / rate(coredns_fanout_query_count_total[5m])` as the user-facing failure ratio — a sustained `no_response`/`upstream_error` rate means *all* upstreams are failing together (upstream outage, local network, or too-tight `timeout`), not just one slow server.
 
 ### Debug logging
 
