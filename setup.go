@@ -121,6 +121,7 @@ func setup(c *caddy.Controller) error {
 			}
 		}
 		log.Infof("fanout %s", readBuildInfo())
+		log.Infof("fanout config: %s", f.configSummary())
 		return f.OnStartup()
 	})
 	c.OnShutdown(f.OnShutdown)

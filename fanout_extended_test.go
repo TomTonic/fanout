@@ -36,6 +36,35 @@ import (
 	"go.uber.org/goleak"
 )
 
+// TestConfigSummary verifies that the startup config summary renders the effective
+// runtime configuration, including the human-readable "inf" rendering for unlimited
+// attempts and the default sequential policy when none is configured.
+func TestConfigSummary(t *testing.T) {
+	f := New()
+	f.From = "."
+	f.net = UDP
+	f.Timeout = 2 * time.Second
+	f.AddClient(metricsClientStub{endpoint: "a.invalid:53", network: UDP})
+	f.AddClient(metricsClientStub{endpoint: "b.invalid:53", network: UDP})
+
+	summary := f.configSummary()
+	require.Contains(t, summary, "from=.")
+	require.Contains(t, summary, "upstreams=2")
+	require.Contains(t, summary, "policy=sequential")
+	require.Contains(t, summary, "race=false")
+	require.Contains(t, summary, "timeout=2s")
+	require.Contains(t, summary, "workers=2")
+	require.Contains(t, summary, "attempts=3")
+
+	f.Attempts = 0
+	f.Race = true
+	f.policyType = policyWeightedRandom
+	summary = f.configSummary()
+	require.Contains(t, summary, "attempts=inf")
+	require.Contains(t, summary, "race=true")
+	require.Contains(t, summary, "policy=weighted-random")
+}
+
 // ---------- 2. ServeDNS: Race mode, Domain mismatch, FormatError ----------
 
 // TestServeDNS_RaceMode verifies race mode (enabled via the "race" directive). In this mode

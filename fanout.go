@@ -100,22 +100,26 @@ func (f *Fanout) ServeDNS(ctx context.Context, w dns.ResponseWriter, m *dns.Msg)
 	if !f.match(&req) {
 		return plugin.NextOrFailure(f.Name(), f.Next, ctx, w, m)
 	}
+	observeQuery()
 	timeoutContext, cancel := context.WithTimeout(ctx, f.Timeout)
 	defer cancel()
 	result := f.getFanoutResult(timeoutContext, f.runWorkers(timeoutContext, &req))
 	if result == nil {
+		observeQueryFailure(queryFailureNoResponse)
 		return dns.RcodeServerFailure, plugin.Error(f.Name(), timeoutContext.Err())
 	}
 	metadata.SetValueFunc(ctx, "fanout/upstream", func() string {
 		return result.client.Endpoint()
 	})
 	if result.err != nil {
+		observeQueryFailure(queryFailureUpstreamError)
 		return dns.RcodeServerFailure, plugin.Error(f.Name(), result.err)
 	}
 	if f.TapPlugin != nil {
 		toDnstap(f.TapPlugin, result.client, &req, result.response, result.start)
 	}
 	if !req.Match(result.response) {
+		observeQueryFailure(queryFailureFormatError)
 		debug.Hexdumpf(result.response, "Wrong reply for id: %d, %s %d", result.response.Id, req.QName(), req.QType())
 		formerr := new(dns.Msg)
 		formerr.SetRcode(req.Req, dns.RcodeFormatError)
@@ -126,9 +130,28 @@ func (f *Fanout) ServeDNS(ctx context.Context, w dns.ResponseWriter, m *dns.Msg)
 	}
 	observeRequestWin(result.client.Endpoint())
 	if err := w.WriteMsg(result.response); err != nil {
+		observeQueryFailure(queryFailureWriteFailed)
 		return dns.RcodeServerFailure, plugin.Error(f.Name(), errors.Wrap(err, "failed to write upstream response"))
 	}
 	return 0, nil
+}
+
+// configSummary renders the effective runtime configuration as a single line for
+// startup logging, so operators can confirm what fanout actually loaded without
+// re-reading the Corefile.
+func (f *Fanout) configSummary() string {
+	policyName := f.policyType
+	if policyName == "" {
+		policyName = policySequential
+	}
+	attempts := fmt.Sprintf("%d", f.Attempts)
+	if f.Attempts == 0 {
+		attempts = "inf"
+	}
+	return fmt.Sprintf(
+		"from=%s upstreams=%d network=%s policy=%s race=%t race_continue_on_error=%t timeout=%s workers=%d attempts=%s",
+		f.From, len(f.clients), f.net, policyName, f.Race, f.RaceContinueOnErrorResponse, f.Timeout, f.WorkerCount, attempts,
+	)
 }
 
 func (f *Fanout) runWorkers(ctx context.Context, req *request.Request) chan *response {

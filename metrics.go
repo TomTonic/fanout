@@ -29,9 +29,28 @@ import (
 )
 
 const (
-	metricLabelTo    = "to"
-	metricLabelError = "error"
-	metricLabelRcode = "rcode"
+	metricLabelTo     = "to"
+	metricLabelError  = "error"
+	metricLabelRcode  = "rcode"
+	metricLabelReason = "reason"
+)
+
+// queryFailureReason is the bounded set of reasons fanout answers a downstream
+// query with a failure instead of a valid upstream response.
+type queryFailureReason string
+
+const (
+	// queryFailureNoResponse: no upstream produced a result before the deadline
+	// (timeout or local cancellation); fanout returns SERVFAIL.
+	queryFailureNoResponse queryFailureReason = "no_response"
+	// queryFailureUpstreamError: every upstream attempt ended with an error; the
+	// best available result carried an error and fanout returns SERVFAIL.
+	queryFailureUpstreamError queryFailureReason = "upstream_error"
+	// queryFailureFormatError: the selected upstream response did not match the
+	// original question; fanout returns FORMERR.
+	queryFailureFormatError queryFailureReason = "format_error"
+	// queryFailureWriteFailed: writing the selected response downstream failed.
+	queryFailureWriteFailed queryFailureReason = "write_failed"
 )
 
 type requestErrorClass string
@@ -95,6 +114,18 @@ var (
 		Buckets:   plugin.TimeBuckets,
 		Help:      "Histogram of the time request attempts with a valid DNS response took.",
 	}, []string{"to"})
+	QueryCount = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: plugin.Namespace,
+		Subsystem: pluginName,
+		Name:      "query_count_total",
+		Help:      "Number of downstream queries handled by fanout (queries matching the configured FROM zone).",
+	})
+	QueryFailureCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: plugin.Namespace,
+		Subsystem: pluginName,
+		Name:      "query_failure_count_total",
+		Help:      "Number of downstream queries that fanout answered with a failure, grouped by reason.",
+	}, []string{metricLabelReason})
 )
 
 type requestMetricError struct {
@@ -124,6 +155,14 @@ func observeRequestCancellation(to string) {
 
 func observeRequestWin(to string) {
 	WinCount.WithLabelValues(to).Inc()
+}
+
+func observeQuery() {
+	QueryCount.Inc()
+}
+
+func observeQueryFailure(reason queryFailureReason) {
+	QueryFailureCount.WithLabelValues(string(reason)).Inc()
 }
 
 func observeRequestResponse(to string, start time.Time, resp *dns.Msg) {
