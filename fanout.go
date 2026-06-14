@@ -104,6 +104,13 @@ func (f *Fanout) ServeDNS(ctx context.Context, w dns.ResponseWriter, m *dns.Msg)
 	timeoutContext, cancel := context.WithTimeout(ctx, f.Timeout)
 	defer cancel()
 	result := f.getFanoutResult(timeoutContext, f.runWorkers(timeoutContext, &req))
+	// We have our answer (or the deadline fired): cancel immediately so any
+	// still-running losing upstream attempts are aborted now instead of
+	// lingering until ServeDNS returns. cancel is idempotent and also runs via
+	// the deferred call above. When the deadline already fired, timeoutContext
+	// keeps its DeadlineExceeded error (cancel does not override an already-set
+	// cause), so the failure reason below stays accurate.
+	cancel()
 	if result == nil {
 		observeQueryFailure(queryFailureNoResponse)
 		return dns.RcodeServerFailure, plugin.Error(f.Name(), timeoutContext.Err())
@@ -161,10 +168,21 @@ func (f *Fanout) runWorkers(ctx context.Context, req *request.Request) chan *res
 	go func() {
 		defer close(workerCh)
 		for i := 0; i < f.serverCount; i++ {
+			// Evaluate Pick() into a variable first. A send case in a select
+			// (workerCh <- sel.Pick()) evaluates its right-hand side even when
+			// the ctx.Done() case wins, which would silently consume and discard
+			// a pick on cancellation. serverCount is clamped to <= len(clients)
+			// (see initServerSelectionPolicy), so Pick never returns nil today;
+			// the guard keeps a future policy from feeding a nil Client into a
+			// worker (which would panic on c.Endpoint()).
+			c := sel.Pick()
+			if c == nil {
+				continue
+			}
 			select {
 			case <-ctx.Done():
 				return
-			case workerCh <- sel.Pick():
+			case workerCh <- c:
 			}
 		}
 	}()
@@ -180,6 +198,11 @@ func (f *Fanout) runWorkers(ctx context.Context, req *request.Request) chan *res
 					select {
 					case <-ctx.Done():
 						return
+					// Each worker gets its own request.Request so the lazily
+					// cached fields (Size, Name, ...) are not shared. W and Req
+					// are still shared across all fan-out workers, so Req
+					// (*dns.Msg) MUST be treated as read-only by every Client
+					// (see Client.Request).
 					case responseCh <- f.processClient(ctx, c, &request.Request{W: req.W, Req: req.Req}):
 					}
 				}

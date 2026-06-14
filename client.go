@@ -43,6 +43,14 @@ var errMaxReadLoopExceeded = errors.New("maximum read loop iterations exceeded w
 // NewClient, NewDoHClient, NewDoH3Client, or NewDoQClient during setup.
 type Client interface {
 	// Request sends one DNS request to the upstream and returns the DNS response.
+	//
+	// The same *dns.Msg (r.Req) is shared concurrently across all fan-out
+	// workers for a single query, so implementations MUST treat r.Req as
+	// read-only: reading fields and packing it to wire format is safe, but
+	// mutating it — for example zeroing the ID for DoH/DoQ per RFC 8484 /
+	// RFC 9250, or adding EDNS options — would be a data race and would corrupt
+	// the requests sent to the other upstreams. Operate on r.Req.Copy() if
+	// mutation is ever required.
 	Request(context.Context, *request.Request) (*dns.Msg, error)
 	// Endpoint returns the configured upstream endpoint string.
 	Endpoint() string
