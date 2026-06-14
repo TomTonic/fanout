@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/plugin/test"
 	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
@@ -42,6 +43,8 @@ const (
 	responseWinMetricName     = "coredns_fanout_response_win_count_total"
 	rcodeCountMetricName      = "coredns_fanout_response_rcode_count_total"
 	requestDurationMetricName = "coredns_fanout_request_duration_seconds"
+	queryCountMetricName      = "coredns_fanout_query_count_total"
+	queryFailureMetricName    = "coredns_fanout_query_failure_count_total"
 )
 
 type fakeTransport struct {
@@ -434,6 +437,159 @@ func assertRequestOutcomeInvariant(t *testing.T, before, after metricsSnapshot) 
 	require.Equal(t, attemptDelta, errorDelta+cancelDelta+successDelta)
 	require.Equal(t, successDelta, after.totalRcodeCount-before.totalRcodeCount)
 	require.GreaterOrEqual(t, successDelta, after.winCount-before.winCount)
+}
+
+func queryCounterValue(t *testing.T) float64 {
+	t.Helper()
+	return counterValue(t, queryCountMetricName, map[string]string{})
+}
+
+func queryFailureValue(t *testing.T, reason queryFailureReason) float64 {
+	t.Helper()
+	return counterValue(t, queryFailureMetricName, map[string]string{metricLabelReason: string(reason)})
+}
+
+// TestServeDNSQueryMetricsCountHandledQueryAndWin verifies that a query fanout
+// handles increments the downstream query counter and, on a winning response,
+// records no query-level failure.
+func TestServeDNSQueryMetricsCountHandledQueryAndWin(t *testing.T) {
+	beforeQueries := queryCounterValue(t)
+	beforeFail := queryFailureValue(t, queryFailureNoResponse)
+
+	f := New()
+	f.From = "."
+	f.Attempts = 1
+	f.WorkerCount = 1
+	f.AddClient(metricsClientStub{
+		endpoint: "query-metrics-win.invalid:53",
+		network:  UDP,
+		request: func(_ context.Context, req *request.Request) (*dns.Msg, error) {
+			resp := new(dns.Msg)
+			resp.SetReply(req.Req)
+			return resp, nil
+		},
+	})
+
+	req := new(dns.Msg)
+	req.SetQuestion("example.org.", dns.TypeA)
+	rcode, err := f.ServeDNS(context.Background(), &test.ResponseWriter{}, req)
+	require.NoError(t, err)
+	require.Equal(t, 0, rcode)
+
+	require.Equal(t, beforeQueries+1, queryCounterValue(t))
+	require.Equal(t, beforeFail, queryFailureValue(t, queryFailureNoResponse))
+}
+
+// TestServeDNSQueryMetricsNotCountedWhenUnmatched verifies that queries which do
+// not match the configured FROM zone are passed to the next plugin without
+// inflating the downstream query counter.
+func TestServeDNSQueryMetricsNotCountedWhenUnmatched(t *testing.T) {
+	before := queryCounterValue(t)
+
+	f := New()
+	f.From = "example.org."
+	f.Next = plugin.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
+		msg := new(dns.Msg)
+		msg.SetReply(r)
+		logErrIfNotNil(w.WriteMsg(msg))
+		return dns.RcodeSuccess, nil
+	})
+
+	req := new(dns.Msg)
+	req.SetQuestion("other.com.", dns.TypeA)
+	_, err := f.ServeDNS(context.Background(), &test.ResponseWriter{}, req)
+	require.NoError(t, err)
+
+	require.Equal(t, before, queryCounterValue(t), "unmatched queries must not increment the query counter")
+}
+
+// TestServeDNSQueryFailureNoResponse verifies that when no upstream produces a
+// result before the deadline, fanout records a no_response query failure.
+func TestServeDNSQueryFailureNoResponse(t *testing.T) {
+	beforeQueries := queryCounterValue(t)
+	beforeFail := queryFailureValue(t, queryFailureNoResponse)
+
+	f := New()
+	f.From = "."
+	f.Attempts = 1
+	f.WorkerCount = 1
+	f.AddClient(metricsClientStub{
+		endpoint: "query-noresponse.invalid:53",
+		network:  UDP,
+		request: func(ctx context.Context, _ *request.Request) (*dns.Msg, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	})
+
+	// An already-cancelled context makes getFanoutResult return nil deterministically.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	req := new(dns.Msg)
+	req.SetQuestion("example.org.", dns.TypeA)
+	rcode, err := f.ServeDNS(ctx, &test.ResponseWriter{}, req)
+	require.Equal(t, dns.RcodeServerFailure, rcode)
+	require.Error(t, err)
+
+	require.Equal(t, beforeQueries+1, queryCounterValue(t))
+	require.Equal(t, beforeFail+1, queryFailureValue(t, queryFailureNoResponse))
+}
+
+// TestServeDNSQueryFailureUpstreamError verifies that when every upstream attempt
+// fails, fanout records an upstream_error query failure and returns SERVFAIL.
+func TestServeDNSQueryFailureUpstreamError(t *testing.T) {
+	before := queryFailureValue(t, queryFailureUpstreamError)
+
+	f := New()
+	f.From = "."
+	f.Attempts = 1
+	f.WorkerCount = 1
+	f.AddClient(metricsClientStub{
+		endpoint: "query-upstreamerr.invalid:53",
+		network:  UDP,
+		request: func(_ context.Context, _ *request.Request) (*dns.Msg, error) {
+			return nil, errors.New("upstream boom")
+		},
+	})
+
+	req := new(dns.Msg)
+	req.SetQuestion("example.org.", dns.TypeA)
+	rcode, err := f.ServeDNS(context.Background(), &test.ResponseWriter{}, req)
+	require.Equal(t, dns.RcodeServerFailure, rcode)
+	require.Error(t, err)
+
+	require.Equal(t, before+1, queryFailureValue(t, queryFailureUpstreamError))
+}
+
+// TestServeDNSQueryFailureFormatError verifies that a selected upstream response
+// whose question does not match the request is recorded as a format_error query
+// failure and answered with FORMERR.
+func TestServeDNSQueryFailureFormatError(t *testing.T) {
+	before := queryFailureValue(t, queryFailureFormatError)
+
+	f := New()
+	f.From = "."
+	f.Attempts = 1
+	f.WorkerCount = 1
+	f.AddClient(metricsClientStub{
+		endpoint: "query-formaterr.invalid:53",
+		network:  UDP,
+		request: func(_ context.Context, _ *request.Request) (*dns.Msg, error) {
+			resp := new(dns.Msg)
+			resp.SetQuestion("mismatch.example.org.", dns.TypeA)
+			resp.Response = true
+			return resp, nil
+		},
+	})
+
+	req := new(dns.Msg)
+	req.SetQuestion("example.org.", dns.TypeA)
+	rcode, err := f.ServeDNS(context.Background(), &test.ResponseWriter{}, req)
+	require.NoError(t, err)
+	require.Equal(t, 0, rcode)
+
+	require.Equal(t, before+1, queryFailureValue(t, queryFailureFormatError))
 }
 
 func counterValue(t *testing.T, name string, labels map[string]string) float64 {
