@@ -65,6 +65,20 @@ type client struct {
 	transport Transport
 	addr      string
 	net       string
+	// readTimeoutOverride bounds a single response read, replacing the readTimeout
+	// default when non-zero. Only tests set it: an upstream that is deliberately
+	// silent otherwise costs the full production timeout per attempt, which is what
+	// made the fanout suites spend most of their runtime asleep. Production clients
+	// leave it zero and get readTimeout.
+	readTimeoutOverride time.Duration
+}
+
+// responseReadTimeout returns the deadline budget for one response read.
+func (c *client) responseReadTimeout() time.Duration {
+	if c.readTimeoutOverride > 0 {
+		return c.readTimeoutOverride
+	}
+	return readTimeout
 }
 
 // NewClient creates a plain DNS client for addr over net.
@@ -220,7 +234,7 @@ func (c *client) exchangeMsg(conn *dns.Conn, r *request.Request) (*dns.Msg, erro
 	if err := conn.WriteMsg(r.Req); err != nil {
 		return nil, withRequestErrorClass(err, requestErrorRequestSend)
 	}
-	if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
+	if err := conn.SetReadDeadline(time.Now().Add(c.responseReadTimeout())); err != nil {
 		return nil, withRequestErrorClass(err, requestErrorResponseRead)
 	}
 	for range maxReadLoopIterations {
