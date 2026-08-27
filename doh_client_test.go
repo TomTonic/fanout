@@ -94,6 +94,10 @@ func newDoHTestServer(t *testing.T, handler dns.HandlerFunc) (*httptest.Server, 
 	})
 
 	srv := httptest.NewTLSServer(mux)
+	// Shut the server down through t.Cleanup rather than making every caller
+	// remember a defer. Cleanups run after the test's own defers, so a caller that
+	// releases a blocked handler by defer still does so before the server closes.
+	t.Cleanup(srv.Close)
 
 	// Build a client TLS config that trusts the test server's certificate.
 	certPool := x509.NewCertPool()
@@ -171,7 +175,6 @@ func TestDoHClientBasicRequest(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 
@@ -198,7 +201,6 @@ func TestDoHClientNXDOMAIN(t *testing.T) { //nolint:dupl // test for NXDOMAIN re
 		msg.SetRcode(r, dns.RcodeNameError)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 
@@ -227,7 +229,6 @@ func TestDoHClientMultipleRecords(t *testing.T) { //nolint:dupl // test for mult
 		)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 
@@ -379,7 +380,6 @@ func TestDoHClientSetTLSConfigConcurrent(t *testing.T) {
 		msg.SetReply(r)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -438,7 +438,6 @@ func TestDoHClientConcurrentRequests(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 
@@ -480,7 +479,6 @@ func TestDoHClientAAAARecord(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 
@@ -508,7 +506,6 @@ func TestDoHClientEmptyResponse(t *testing.T) {
 		// No answer records (NODATA).
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 
@@ -712,7 +709,6 @@ func TestDoHClientIDPreservation(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 
@@ -736,7 +732,6 @@ func TestDoHClientSERVFAIL(t *testing.T) { //nolint:dupl // test for SERVFAIL re
 		msg.SetRcode(r, dns.RcodeServerFailure)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 
@@ -765,7 +760,6 @@ func TestDoHIntegrationWithFanout(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	f := New()
 	f.From = "."
@@ -813,7 +807,6 @@ func TestDoHClientTXTRecord(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 
@@ -923,7 +916,6 @@ func TestDoHClientPreservesFlags(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 

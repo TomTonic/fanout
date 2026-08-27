@@ -132,13 +132,17 @@ func newDoQTestServer(t *testing.T, handler dns.HandlerFunc) *doqTestServer { //
 		}
 	}()
 
-	return &doqTestServer{
+	srv := &doqTestServer{
 		listener:  listener,
 		transport: tr,
 		addr:      conn.LocalAddr().String(),
 		clientTLS: clientTLS,
 		done:      done,
 	}
+	// Shut down via t.Cleanup so callers need no defer. Cleanups run after the
+	// test's own defers, so a handler released by defer is gone before shutdown.
+	t.Cleanup(srv.close)
+	return srv
 }
 
 // handleDoQConn processes DoQ streams on a single QUIC connection.
@@ -233,7 +237,6 @@ func TestDoQClientBasicRequest(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
@@ -261,7 +264,6 @@ func TestDoQClientNXDOMAIN(t *testing.T) {
 		msg.SetRcode(r, dns.RcodeNameError)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
@@ -285,7 +287,6 @@ func TestDoQClientSERVFAIL(t *testing.T) {
 		msg.SetRcode(r, dns.RcodeServerFailure)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
@@ -314,7 +315,6 @@ func TestDoQClientMultipleRecords(t *testing.T) {
 		)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
@@ -341,7 +341,6 @@ func TestDoQClientAAAARecord(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
@@ -373,7 +372,6 @@ func TestDoQClientIDPreservation(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
@@ -405,7 +403,6 @@ func TestDoQClientPreservesFlags(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
@@ -431,7 +428,6 @@ func TestDoQClientEmptyResponse(t *testing.T) {
 		msg.SetReply(r)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
@@ -460,7 +456,6 @@ func TestDoQClientTXTRecord(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
@@ -493,7 +488,6 @@ func TestDoQClientConcurrentRequests(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
@@ -599,10 +593,9 @@ func TestDoQClientContextCancellation(t *testing.T) {
 		// Slow handler: block until the test signals completion.
 		<-handlerDone
 	})
-	defer func() {
-		close(handlerDone)
-		srv.close()
-	}()
+	// Only the handler needs releasing here; the server is shut down by the
+	// t.Cleanup that newDoQTestServer registers, which runs after this defer.
+	defer close(handlerDone)
 
 	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
@@ -629,7 +622,6 @@ func TestDoQClientConnectionReuse(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
@@ -660,7 +652,6 @@ func TestDoQIntegrationWithFanout(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	f := New()
 	f.From = "."
@@ -864,7 +855,6 @@ func TestDoQClientReconnectAfterConnectionLoss(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)

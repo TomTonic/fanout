@@ -164,13 +164,17 @@ func newDoH3TestServer(t *testing.T, handler dns.HandlerFunc) *doh3TestServer { 
 		_ = h3Server.Serve(conn)
 	}()
 
-	return &doh3TestServer{
+	srv := &doh3TestServer{
 		server:    h3Server,
 		conn:      conn,
 		addr:      conn.LocalAddr().String(),
 		clientTLS: clientTLS,
 		certPEM:   certPEM,
 	}
+	// Shut down via t.Cleanup so callers need no defer. Cleanups run after the
+	// test's own defers, so a handler released by defer is gone before shutdown.
+	t.Cleanup(srv.close)
+	return srv
 }
 
 // closeDoH3Client shuts down the underlying QUIC transport(s) so that their background goroutines
@@ -196,7 +200,6 @@ func TestDoH3ClientBasicRequest(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -224,7 +227,6 @@ func TestDoH3ClientNXDOMAIN(t *testing.T) {
 		msg.SetRcode(r, dns.RcodeNameError)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -252,7 +254,6 @@ func TestDoH3ClientMultipleRecords(t *testing.T) {
 		)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -279,7 +280,6 @@ func TestDoH3ClientAAAARecord(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -307,7 +307,6 @@ func TestDoH3ClientSERVFAIL(t *testing.T) {
 		msg.SetRcode(r, dns.RcodeServerFailure)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -336,7 +335,6 @@ func TestDoH3ClientIDPreservation(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -367,7 +365,6 @@ func TestDoH3ClientPreservesFlags(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -394,7 +391,6 @@ func TestDoH3ClientEmptyResponse(t *testing.T) {
 		msg.SetReply(r)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -423,7 +419,6 @@ func TestDoH3ClientTXTRecord(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -455,7 +450,6 @@ func TestDoH3ClientConcurrentRequests(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -556,7 +550,6 @@ func TestDoH3ClientSetTLSConfigConcurrent(t *testing.T) {
 		msg.SetReply(r)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoH3ClientWithTLS("https://"+srv.addr+"/dns-query", srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -619,7 +612,6 @@ func TestDoH3ClientContextCancellation(t *testing.T) {
 	srv := newDoH3TestServer(t, func(_ dns.ResponseWriter, _ *dns.Msg) {
 		<-unblock
 	})
-	defer srv.close()    // runs last
 	defer close(unblock) // runs first, so the handler is gone before shutdown
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
@@ -663,7 +655,6 @@ func TestDoH3IntegrationWithFanout(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	f := New()
 	f.From = "."
