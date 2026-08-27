@@ -722,8 +722,7 @@ func BenchmarkServeDNS_Throughput(b *testing.B) {
 	req := new(dns.Msg)
 	req.SetQuestion(testQuery, dns.TypeA)
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = f.ServeDNS(context.Background(), &test.ResponseWriter{}, req)
 	}
 }

@@ -18,12 +18,12 @@ package fanout
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/coredns/coredns/plugin"
 	"github.com/miekg/dns"
-	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -186,8 +186,7 @@ func withRequestErrorClass(err error, class requestErrorClass) error {
 }
 
 func requestErrorClassOf(err error) requestErrorClass {
-	var metricErr *requestMetricError
-	if errors.As(err, &metricErr) {
+	if metricErr, ok := errors.AsType[*requestMetricError](err); ok {
 		return metricErr.class
 	}
 	return requestErrorProtocol
