@@ -355,7 +355,7 @@ func TestTransportPool_FullPoolClosesConnection(t *testing.T) {
 	}
 
 	// Drain pool - should get exactly connPoolSize connections
-	for i := 0; i < connPoolSize; i++ {
+	for range connPoolSize {
 		c, dialErr := tr.Dial(context.Background(), TCP)
 		require.NoError(t, dialErr)
 		_ = c.Close()

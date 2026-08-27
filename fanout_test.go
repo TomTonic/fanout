@@ -76,7 +76,7 @@ func newServer(network string, f dns.HandlerFunc) *server {
 	s := &dns.Server{}
 	s.Handler = f
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		if network == TCP {
 			s.Listener, _ = net.Listen(TCP, ":0")
 			if s.Listener != nil {
@@ -193,7 +193,7 @@ func (t *fanoutTestSuite) TestWorkerCountLessThenServers() {
 	f := New()
 	f.From = "."
 
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		incorrectServer := newServer(t.network, func(_ dns.ResponseWriter, _ *dns.Msg) {
 		})
 		f.AddClient(NewClient(incorrectServer.addr, t.network))
@@ -263,7 +263,7 @@ func (t *fanoutTestSuite) TestTwoServersUnsuccessfulResponse() {
 	f.AddClient(c1)
 	f.AddClient(c2)
 	writer := &cachedDNSWriter{ResponseWriter: new(test.ResponseWriter)}
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		req := new(dns.Msg)
 		req.SetQuestion(testQuery, dns.TypeA)
 		_, err := f.ServeDNS(context.TODO(), writer, req)
@@ -327,7 +327,7 @@ func (t *fanoutTestSuite) TestBusyServer() {
 	f.AddClient(c)
 	req := new(dns.Msg)
 	req.SetQuestion(testQuery, dns.TypeA)
-	for i := int32(0); i < totalRequestNum; i++ {
+	for range totalRequestNum {
 		_, err := f.ServeDNS(context.TODO(), &test.ResponseWriter{}, req)
 		t.Nil(err)
 	}

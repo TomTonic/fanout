@@ -67,14 +67,14 @@ func TestDomainGet(t *testing.T) {
 func TestDomain_ContainsShouldWorkFast(t *testing.T) {
 	var samples []string
 	d := NewDomain()
-	for i := 0; i < 100; i++ {
-		for j := 0; j < 100; j++ {
+	for i := range 100 {
+		for range 100 {
 			samples = append(samples, genSample(i+1))
 			d.AddString(samples[len(samples)-1])
 		}
 	}
 	start := time.Now()
-	for i := 0; i < 10000; i++ {
+	for i := range 10000 {
 		require.True(t, d.Contains(samples[i]))
 	}
 	require.True(t, time.Since(start) < time.Second/4)
@@ -104,14 +104,14 @@ func TestDomain_DoNotStoreExtraEntries(t *testing.T) {
 func BenchmarkDomain_ContainsMatch(b *testing.B) {
 	d := NewDomain()
 	var samples []string
-	for i := 0; i < 100; i++ {
-		for j := 0; j < 100; j++ {
+	for i := range 100 {
+		for range 100 {
 			samples = append(samples, genSample(i+1))
 			d.AddString(samples[len(samples)-1])
 		}
 	}
 	for b.Loop() {
-		for j := 0; j < 10000; j++ {
+		for j := range 10000 {
 			d.Contains(samples[j])
 		}
 	}
@@ -120,8 +120,8 @@ func BenchmarkDomain_ContainsMatch(b *testing.B) {
 func BenchmarkDomain_AddString(b *testing.B) {
 	d := NewDomain()
 	var samples []string
-	for i := 0; i < 100; i++ {
-		for j := 0; j < 100; j++ {
+	for i := range 100 {
+		for range 100 {
 			samples = append(samples, genSample(i+1))
 		}
 	}
@@ -135,8 +135,8 @@ func BenchmarkDomain_AddString(b *testing.B) {
 func BenchmarkDomain_ContainsAny(b *testing.B) {
 	d := NewDomain()
 	var samples []string
-	for i := 0; i < 100; i++ {
-		for j := 0; j < 100; j++ {
+	for i := range 100 {
+		for range 100 {
 			d.AddString(genSample(i + 1))
 			samples = append(samples, genSample(i+1))
 		}
@@ -158,9 +158,9 @@ func genSample(n int) string {
 	}
 
 	var sb strings.Builder
-	for segment := 0; segment < n; segment++ {
+	for range n {
 		l := randInt()%9 + 1
-		for i := 0; i < l; i++ {
+		for range l {
 			v := (randInt() % 26) + 97
 			_, _ = sb.WriteRune(rune(v))
 		}

@@ -501,7 +501,7 @@ func TestDoQClientConcurrentRequests(t *testing.T) {
 	const goroutines = 10
 	errs := make(chan error, goroutines)
 
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			req := new(dns.Msg)
 			req.SetQuestion("concurrent.example.com.", dns.TypeA)
@@ -520,7 +520,7 @@ func TestDoQClientConcurrentRequests(t *testing.T) {
 		}()
 	}
 
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		require.NoError(t, <-errs)
 	}
 }
@@ -635,7 +635,7 @@ func TestDoQClientConnectionReuse(t *testing.T) {
 	defer closeDoQClient(t, c)
 
 	// Send multiple requests sequentially; all should succeed on one connection.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		req := new(dns.Msg)
 		req.SetQuestion("reuse.example.com.", dns.TypeA)
 

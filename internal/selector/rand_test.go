@@ -58,7 +58,7 @@ func TestWeightedRand_Pick(t *testing.T) {
 // pickAll picks n elements from the selector, returning unique non-empty values and the count of empty (default) picks.
 func pickAll(wrs *WeightedRand[string], n int) (picked map[string]bool, defaults int) {
 	picked = make(map[string]bool)
-	for i := 0; i < n; i++ {
+	for range n {
 		if v := wrs.Pick(); v == "" {
 			defaults++
 		} else {

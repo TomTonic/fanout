@@ -378,22 +378,18 @@ func TestDoHClientSetTLSConfigConcurrent(t *testing.T) {
 
 	var wg sync.WaitGroup
 	// Concurrent SetTLSConfig calls.
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 5 {
+		wg.Go(func() {
 			c.SetTLSConfig(clientTLS.Clone())
-		}()
+		})
 	}
 	// Concurrent Request calls.
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 5 {
+		wg.Go(func() {
 			req := new(dns.Msg)
 			req.SetQuestion("race.example.com.", dns.TypeA)
 			_, _ = c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
-		}()
+		})
 	}
 	wg.Wait()
 }
@@ -440,7 +436,7 @@ func TestDoHClientConcurrentRequests(t *testing.T) {
 	const goroutines = 10
 	errs := make(chan error, goroutines)
 
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			req := new(dns.Msg)
 			req.SetQuestion("concurrent.example.com.", dns.TypeA)
@@ -459,7 +455,7 @@ func TestDoHClientConcurrentRequests(t *testing.T) {
 		}()
 	}
 
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		require.NoError(t, <-errs)
 	}
 }

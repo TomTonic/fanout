@@ -175,7 +175,7 @@ func TestServeDNS_CancelsLosingUpstreamsPromptly(t *testing.T) {
 // Sets up two slow servers (200 ms each) and asserts that exactly one answer is returned with RcodeSuccess.
 func TestServeDNS_RaceMode(t *testing.T) {
 	defer goleak.VerifyNone(t)
-	var answered int32
+	var answered atomic.Int32
 
 	// Two slow servers – race mode should return the first successful response
 	s1 := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
@@ -183,7 +183,7 @@ func TestServeDNS_RaceMode(t *testing.T) {
 		msg := new(dns.Msg)
 		msg.SetReply(r)
 		msg.Answer = append(msg.Answer, test.A("example1. IN A 10.0.0.1"))
-		atomic.AddInt32(&answered, 1)
+		answered.Add(1)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 	defer s1.close()
@@ -192,7 +192,7 @@ func TestServeDNS_RaceMode(t *testing.T) {
 		msg := new(dns.Msg)
 		msg.SetReply(r)
 		msg.Answer = append(msg.Answer, test.A("example1. IN A 10.0.0.2"))
-		atomic.AddInt32(&answered, 1)
+		answered.Add(1)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 	defer s2.close()

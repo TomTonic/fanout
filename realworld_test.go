@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"sort"
@@ -99,9 +100,7 @@ func reportRealWorldSkipSummary() {
 	sort.Strings(reasons)
 
 	reasonCount := make(map[string]int, len(realWorldSkipReasons))
-	for k, v := range realWorldSkipReasons {
-		reasonCount[k] = v
-	}
+	maps.Copy(reasonCount, realWorldSkipReasons)
 	realWorldSkipReasonM.Unlock()
 
 	fmt.Fprintf(os.Stderr, "\n[fanout] %d real-world test(s) were skipped due to environment restrictions:\n", total)
@@ -467,7 +466,6 @@ func TestRealWorldCloudflareAllProtocols(t *testing.T) { //nolint:gocyclo,funlen
 	allIPs := make(map[string][]net.IP) // protocol name -> IPs
 
 	for _, p := range protocols {
-		p := p
 		t.Run(p.name, func(t *testing.T) {
 			defer p.close()
 			requireRealWorldCapability(t, p.name, func(ctx context.Context) error {
@@ -567,7 +565,6 @@ func TestRealWorldCloudflareAllProtocolsAAAA(t *testing.T) {
 	}
 
 	for _, p := range protocols {
-		p := p
 		t.Run(p.name, func(t *testing.T) {
 			defer p.close()
 			requireRealWorldCapability(t, p.name, func(ctx context.Context) error {
