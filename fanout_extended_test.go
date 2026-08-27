@@ -44,6 +44,7 @@ import (
 // attempts and the default sequential policy when none is configured.
 func TestConfigSummary(t *testing.T) {
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = UDP
 	f.Timeout = 2 * time.Second
@@ -75,6 +76,7 @@ func TestConfigSummary(t *testing.T) {
 func TestServeDNS_DoesNotMutateSharedRequest(t *testing.T) {
 	t.Cleanup(func() { goleak.VerifyNone(t) })
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.Attempts = 1
 	readOnly := func(_ context.Context, r *request.Request) (*dns.Msg, error) {
@@ -119,6 +121,7 @@ func (nilClientPolicy) selector([]Client) clientSelector { return nilClientSelec
 func TestServeDNS_NilClientPickDoesNotPanic(t *testing.T) {
 	t.Cleanup(func() { goleak.VerifyNone(t) })
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.Attempts = 1
 	f.AddClient(metricsClientStub{endpoint: "unused.invalid:53", network: UDP, request: func(context.Context, *request.Request) (*dns.Msg, error) {
@@ -149,6 +152,7 @@ func TestServeDNS_NilClientPickDoesNotPanic(t *testing.T) {
 func TestServeDNS_CancelsLosingUpstreamsPromptly(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := New()
+		shutdownAfterTest(t, f)
 		f.From = "."
 		f.Attempts = 1
 		f.Timeout = 30 * time.Second // the loser would block far past the test budget if not cancelled
@@ -224,6 +228,7 @@ func TestServeDNS_RaceMode(t *testing.T) {
 	})
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.Race = true
 	f.net = TCP
@@ -262,6 +267,7 @@ func TestServeDNS_RaceMode_DefaultReturnsFirstErrorResponse(t *testing.T) {
 	})
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.Race = true
 	f.net = TCP
@@ -332,6 +338,7 @@ func testRaceContinueOnErrorTerminalResponse(t *testing.T, fastRcode, expectedRc
 func TestServeDNS_DomainMismatch_CallsNext(t *testing.T) {
 	t.Cleanup(func() { goleak.VerifyNone(t) })
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = exampleOrgFQDN
 	f.Next = plugin.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
 		msg := new(dns.Msg)
@@ -358,6 +365,7 @@ func TestServeDNS_ExcludeDomain_CallsNext(t *testing.T) {
 	t.Cleanup(func() { goleak.VerifyNone(t) })
 	nextCalled := false
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.ExcludeDomains.AddString("blocked.example.com.")
 	f.Next = plugin.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
@@ -391,6 +399,7 @@ func TestServeDNS_FormatError_MismatchedId(t *testing.T) {
 	})
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.AddClient(NewClient(s.addr, TCP))
@@ -490,6 +499,7 @@ func TestServeDNS_AllServersTimeout(t *testing.T) {
 	defer close(unblock)
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.Timeout = 500 * time.Millisecond
@@ -516,6 +526,7 @@ func TestServeDNS_ContextCancelledBeforeRequest(t *testing.T) {
 	})
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.Timeout = 5 * time.Second
@@ -545,6 +556,7 @@ func TestProcessClient_AttemptLimitReached(t *testing.T) {
 	})
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.Attempts = 2
@@ -616,6 +628,7 @@ func TestServeDNS_TLS(t *testing.T) {
 	c.SetTLSConfig(clientTLSConfig)
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCPTLS
 	f.AddClient(c)
@@ -754,6 +767,7 @@ func TestClient_NetAndEndpoint(t *testing.T) {
 // for plugin identification and logging.
 func TestFanout_Name(t *testing.T) {
 	f := New()
+	shutdownAfterTest(t, f)
 	require.Equal(t, "fanout", f.Name())
 }
 
