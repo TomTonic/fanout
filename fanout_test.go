@@ -119,6 +119,20 @@ func newServer(tb testing.TB, network string, f dns.HandlerFunc) *server {
 	return srv
 }
 
+// shutdownAfterTest registers f's shutdown with tb, so the upstream clients built
+// during Corefile parsing are closed when the test ends rather than outliving it.
+// This matters most for h3:// upstreams, whose transports otherwise sit around until
+// their grace period expires and show up as leaked goroutines in a later test.
+//
+// A nil f is accepted and ignored, which is what parseFanout returns on a parse error.
+func shutdownAfterTest(tb testing.TB, f *Fanout) {
+	tb.Helper()
+	if f == nil {
+		return
+	}
+	tb.Cleanup(func() { logErrIfNotNil(f.OnShutdown()) })
+}
+
 func makeRecordA(rr string) *dns.A {
 	r, _ := dns.NewRR(rr)
 	return r.(*dns.A)
@@ -146,6 +160,7 @@ func TestFanout_ExceptFile(t *testing.T) {
 }`, file.Name())
 	c := caddy.NewTestController("dns", source)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 	require.Nil(t, err)
 	for _, e := range exclude {
 		require.True(t, f.ExcludeDomains.Contains(e))

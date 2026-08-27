@@ -650,6 +650,7 @@ func TestSetupDoHConfig(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := caddy.NewTestController("dns", tc.input)
 			f, err := parseFanout(c)
+			shutdownAfterTest(t, f)
 
 			if tc.expectedErr != "" {
 				require.Error(t, err)
@@ -676,6 +677,7 @@ func TestSetupDoHWithOptions(t *testing.T) {
 	}`
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.Len(t, f.clients, 2)
@@ -692,6 +694,7 @@ func TestSetupDoHNetworkProtocol(t *testing.T) {
 	}`
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.Equal(t, DOH, f.net)
@@ -831,6 +834,7 @@ func TestSetupMixedDoHAndPlainParsing(t *testing.T) {
 	input := "fanout . 127.0.0.1 https://dns.google/dns-query 127.0.0.2"
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.Len(t, f.clients, 3)
@@ -852,6 +856,7 @@ func TestSetupDoHOnlyNoPlain(t *testing.T) {
 	input := corefileDoHGoogle
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.Len(t, f.clients, 1)
@@ -865,6 +870,7 @@ func TestSetupDoHWithExcept(t *testing.T) {
 	}`
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.True(t, f.ExcludeDomains.Contains("internal.example.com."))
@@ -940,6 +946,7 @@ func TestSetupDoHConfigWithRace(t *testing.T) {
 	}`
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.True(t, f.Race)
@@ -960,6 +967,7 @@ func TestSetupDoHConfigCaseInsensitive(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := caddy.NewTestController("dns", tc.input)
 			f, err := parseFanout(c)
+			shutdownAfterTest(t, f)
 			require.NoError(t, err)
 			require.Len(t, f.clients, 1)
 			require.Equal(t, DOH, f.clients[0].Net())
@@ -985,6 +993,7 @@ func TestDoHParseDoesNotBreakExistingSetup(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := caddy.NewTestController("dns", tc.input)
 			f, err := parseFanout(c)
+			shutdownAfterTest(t, f)
 			require.NoError(t, err)
 			require.Len(t, f.clients, tc.expectedN)
 			require.Equal(t, tc.expectedNet, f.net)
@@ -1011,6 +1020,7 @@ func TestSetupDoHMixed(t *testing.T) {
 	input := "fanout . tls://1.1.1.1 https://dns.google/dns-query {\ntls-server cloudflare\n}"
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.Len(t, f.clients, 2)
