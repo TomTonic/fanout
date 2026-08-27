@@ -1,6 +1,6 @@
 module github.com/TomTonic/fanout
 
-go 1.26.7
+go 1.26
 
 require (
 	github.com/coredns/caddy v1.1.4
