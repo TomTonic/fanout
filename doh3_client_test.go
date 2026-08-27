@@ -183,7 +183,7 @@ func newDoH3TestServer(t *testing.T, handler dns.HandlerFunc) *doh3TestServer { 
 // which would leave those waiting for the full delay and trip goleak in a later test.
 func closeDoH3Client(t *testing.T, c Client) {
 	t.Helper()
-	if dc, ok := c.(*doh3Client); ok {
+	if dc, ok := concreteClient(c).(*doh3Client); ok {
 		require.NoError(t, dc.Close())
 	}
 }
@@ -201,13 +201,13 @@ func TestDoH3ClientBasicRequest(t *testing.T) {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 
-	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
+	c := newRetryingDoH3Client(t, srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
 	req := new(dns.Msg)
 	req.SetQuestion("example.com.", dns.TypeA)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel()
 
 	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
@@ -228,13 +228,13 @@ func TestDoH3ClientNXDOMAIN(t *testing.T) {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 
-	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
+	c := newRetryingDoH3Client(t, srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
 	req := new(dns.Msg)
 	req.SetQuestion("nonexistent.example.com.", dns.TypeA)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel()
 
 	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
@@ -255,13 +255,13 @@ func TestDoH3ClientMultipleRecords(t *testing.T) {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 
-	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
+	c := newRetryingDoH3Client(t, srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
 	req := new(dns.Msg)
 	req.SetQuestion("multi.example.com.", dns.TypeA)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel()
 
 	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
@@ -281,13 +281,13 @@ func TestDoH3ClientAAAARecord(t *testing.T) {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 
-	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
+	c := newRetryingDoH3Client(t, srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
 	req := new(dns.Msg)
 	req.SetQuestion("example.com.", dns.TypeAAAA)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel()
 
 	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
@@ -308,13 +308,13 @@ func TestDoH3ClientSERVFAIL(t *testing.T) {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 
-	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
+	c := newRetryingDoH3Client(t, srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
 	req := new(dns.Msg)
 	req.SetQuestion("fail.example.com.", dns.TypeA)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel()
 
 	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
@@ -336,14 +336,14 @@ func TestDoH3ClientIDPreservation(t *testing.T) {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 
-	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
+	c := newRetryingDoH3Client(t, srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
 	req := new(dns.Msg)
 	req.SetQuestion("id-test.example.com.", dns.TypeA)
 	req.Id = 54321
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel()
 
 	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
@@ -366,14 +366,14 @@ func TestDoH3ClientPreservesFlags(t *testing.T) {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 
-	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
+	c := newRetryingDoH3Client(t, srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
 	req := new(dns.Msg)
 	req.SetQuestion("flags.example.com.", dns.TypeA)
 	req.RecursionDesired = true
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel()
 
 	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
@@ -392,13 +392,13 @@ func TestDoH3ClientEmptyResponse(t *testing.T) {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 
-	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
+	c := newRetryingDoH3Client(t, srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
 	req := new(dns.Msg)
 	req.SetQuestion("nodata.example.com.", dns.TypeMX)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel()
 
 	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
@@ -420,13 +420,13 @@ func TestDoH3ClientTXTRecord(t *testing.T) {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 
-	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
+	c := newRetryingDoH3Client(t, srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
 	req := new(dns.Msg)
 	req.SetQuestion("txt.example.com.", dns.TypeTXT)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel()
 
 	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
@@ -451,7 +451,7 @@ func TestDoH3ClientConcurrentRequests(t *testing.T) {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 
-	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
+	c := newRetryingDoH3Client(t, srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
 	const goroutines = 10
@@ -461,7 +461,7 @@ func TestDoH3ClientConcurrentRequests(t *testing.T) {
 		go func() {
 			req := new(dns.Msg)
 			req.SetQuestion("concurrent.example.com.", dns.TypeA)
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 			defer cancel()
 			resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
 			if err != nil {
@@ -509,7 +509,7 @@ func TestDoH3ClientSetTLSConfig(t *testing.T) {
 	require.Equal(t, DOH3, c.Net())
 
 	// Verify TLS 1.3 enforcement.
-	dc, ok := c.(*doh3Client)
+	dc, ok := concreteClient(c).(*doh3Client)
 	require.True(t, ok)
 	require.GreaterOrEqual(t, dc.transport.TLSClientConfig.MinVersion, uint16(tls.VersionTLS13))
 }
@@ -524,7 +524,7 @@ func TestDoH3ClientSetTLSConfigCleansRetiredTransports(t *testing.T) {
 	c := NewDoH3Client("https://dns.google/dns-query")
 	defer closeDoH3Client(t, c)
 
-	dc, ok := c.(*doh3Client)
+	dc, ok := concreteClient(c).(*doh3Client)
 	require.True(t, ok)
 
 	c.SetTLSConfig(&tls.Config{MinVersion: tls.VersionTLS13, ServerName: dnsGoogleHost})
@@ -554,7 +554,7 @@ func TestDoH3ClientSetTLSConfigConcurrent(t *testing.T) {
 	c := newDoH3ClientWithTLS("https://"+srv.addr+"/dns-query", srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel()
 
 	var wg sync.WaitGroup
@@ -580,7 +580,7 @@ func TestDoH3ClientSetTLSConfigConcurrent(t *testing.T) {
 func TestDoH3ClientTLSMinVersion(t *testing.T) {
 	c := NewDoH3Client("https://dns.google/dns-query")
 	defer closeDoH3Client(t, c)
-	dc, ok := c.(*doh3Client)
+	dc, ok := concreteClient(c).(*doh3Client)
 	require.True(t, ok)
 	require.GreaterOrEqual(t, dc.transport.TLSClientConfig.MinVersion, uint16(tls.VersionTLS13))
 }
@@ -614,7 +614,7 @@ func TestDoH3ClientContextCancellation(t *testing.T) {
 	})
 	defer close(unblock) // runs first, so the handler is gone before shutdown
 
-	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
+	c := newRetryingDoH3Client(t, srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
 
 	req := new(dns.Msg)
@@ -659,14 +659,14 @@ func TestDoH3IntegrationWithFanout(t *testing.T) {
 	f := New()
 	shutdownAfterTest(t, f)
 	f.From = "."
-	doh3c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
+	doh3c := newRetryingDoH3Client(t, srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, doh3c)
 	f.AddClient(doh3c)
 
 	req := new(dns.Msg)
 	req.SetQuestion("fanout-doh3.example.com.", dns.TypeA)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel()
 
 	resp, err := doh3c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
