@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net"
+	"net/netip"
 
 	"github.com/miekg/dns"
 )
@@ -276,13 +277,26 @@ func detectLocalSubnet(targetAddr string) (*net.IPNet, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing local address: %w", err)
 	}
-	ip := net.ParseIP(host)
-	if ip == nil {
+	// netip.Addr answers "is this v4?" unambiguously via Is4, where net.IP requires the
+	// To4()-returns-nil dance, and Addr.Prefix truncates to the prefix length without
+	// hand-built CIDRMask values. The result is converted back because the caller feeds
+	// it to dns.EDNS0_SUBNET, whose Address field is a net.IP.
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
 		return nil, fmt.Errorf("invalid local IP %q", host)
 	}
+	addr = addr.Unmap() // a v4-mapped v6 address is a v4 subnet for ECS purposes
 
-	if v4 := ip.To4(); v4 != nil {
-		return &net.IPNet{IP: v4.Mask(net.CIDRMask(24, 32)), Mask: net.CIDRMask(24, 32)}, nil
+	bits := 48
+	if addr.Is4() {
+		bits = 24
 	}
-	return &net.IPNet{IP: ip.Mask(net.CIDRMask(48, 128)), Mask: net.CIDRMask(48, 128)}, nil
+	prefix, err := addr.Prefix(bits)
+	if err != nil {
+		return nil, fmt.Errorf("masking local IP %q to /%d: %w", host, bits, err)
+	}
+	return &net.IPNet{
+		IP:   net.IP(prefix.Addr().AsSlice()),
+		Mask: net.CIDRMask(bits, addr.BitLen()),
+	}, nil
 }

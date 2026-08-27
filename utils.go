@@ -18,6 +18,7 @@
 package fanout
 
 import (
+	"cmp"
 	"net"
 	"net/url"
 	"strconv"
@@ -61,10 +62,7 @@ func parseEndpoint(endpoint string) (host, port string) {
 	// Try URL parsing for known schemes (DoH, DoH3 use https://).
 	if u, err := url.Parse(endpoint); err == nil && u.Scheme == "https" {
 		host = u.Hostname()
-		port = u.Port()
-		if port == "" {
-			port = "443"
-		}
+		port = cmp.Or(u.Port(), "443")
 		return host, port
 	}
 	// Fall back to host:port parsing (plain DNS, DoT, DoQ).

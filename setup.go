@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -301,7 +302,7 @@ func initServerSelectionPolicy(f *Fanout) error {
 
 	loadFactor := f.loadFactor
 	if len(loadFactor) == 0 {
-		for i := 0; i < len(f.clients); i++ {
+		for range f.clients {
 			loadFactor = append(loadFactor, maxLoadFactor)
 		}
 	}
@@ -432,7 +433,9 @@ func parseBootstrap(f *Fanout, c *caddyfile.Dispenser) error {
 		if err != nil {
 			return c.Errf("invalid bootstrap address %q: %v", a, err)
 		}
-		if net.ParseIP(host) == nil {
+		// Validation only - the parsed value is discarded, so netip.ParseAddr is
+		// preferable to net.ParseIP, which allocates a 16-byte slice just to throw away.
+		if _, err := netip.ParseAddr(host); err != nil {
 			return c.Errf("bootstrap address must be an IP literal: %q", host)
 		}
 		addrs = append(addrs, a)
@@ -514,11 +517,10 @@ func parseIgnoredFromFile(f *Fanout, c *caddyfile.Dispenser) error {
 	if err != nil {
 		return err
 	}
-	names := strings.Split(string(b), "\n")
-	for i := range names {
-		normalized := plugin.Host(names[i]).NormalizeExact()
+	for name := range strings.SplitSeq(string(b), "\n") {
+		normalized := plugin.Host(name).NormalizeExact()
 		if len(normalized) == 0 {
-			return fmt.Errorf("unable to normalize '%s'", names[i])
+			return fmt.Errorf("unable to normalize '%s'", name)
 		}
 		f.ExcludeDomains.AddString(normalized[0])
 	}
