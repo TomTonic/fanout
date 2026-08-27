@@ -90,6 +90,9 @@ fanout FROM TO... {
 * `network` — specific network protocol for plain upstreams: `tcp`, `udp` (default), or `tcp-tls`.
 * `except` — a space-separated list of domains to exclude from proxying.
 * `except-file` — path to a file with line-separated domains to exclude from proxying.
+  An absolute path may point anywhere. A relative path is resolved against the working
+  directory and must stay inside it: `../` segments are rejected, and so is a symbolic
+  link whose target lies outside. Use an absolute path to load a list from elsewhere.
 * `attempt-count` — the number of failed attempts before considering an upstream to be down. If `0`, the upstream will never be marked as down and the request will run until `timeout`. Default is `3`.
 * `timeout` — the maximum time for the entire request. Default is `30s`.
 * `bootstrap` **IP...** — one or more IP addresses (with optional `:port`, default port 53) of plain-DNS
