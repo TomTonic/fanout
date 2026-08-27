@@ -464,8 +464,8 @@ func TestServeDNS_AllServersTimeout(t *testing.T) {
 	s := newServer(TCP, func(_ dns.ResponseWriter, _ *dns.Msg) {
 		<-unblock
 	})
-	defer s.close()       // runs last
-	defer close(unblock)  // runs first, so the handler is gone before Shutdown
+	defer s.close()      // runs last
+	defer close(unblock) // runs first, so the handler is gone before Shutdown
 
 	f := New()
 	f.From = "."

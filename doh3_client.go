@@ -34,11 +34,11 @@ import (
 // It follows RFC 8484 at the application layer while using QUIC (RFC 9000) as the transport,
 // providing reduced connection-establishment latency and improved multiplexing.
 type doh3Client struct {
-	endpoint          string           // full URL, e.g. "https://dns.google/dns-query"
-	bootstrap         *bootstrapConfig // bootstrap config for hostname resolution (nil = system default)
-	mu                sync.Mutex       // protects h3Client, transport, and retiredTransports during SetTLSConfig
-	h3Client          *http.Client
-	transport         *http3.Transport
+	endpoint  string           // full URL, e.g. "https://dns.google/dns-query"
+	bootstrap *bootstrapConfig // bootstrap config for hostname resolution (nil = system default)
+	mu        sync.Mutex       // protects h3Client, transport, and retiredTransports during SetTLSConfig
+	h3Client  *http.Client
+	transport *http3.Transport
 	// retiredTransports holds replaced transports still inside their grace period,
 	// each mapped to the timer that will close it. Keeping the timer lets shutdown
 	// disarm it instead of leaving it pending.
