@@ -95,11 +95,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Exclude fmt.Errorf
+      - name: Exclude github.com/pkg/errors
         run: |
-          if grep -r --include='*.go' 'fmt.Errorf' . ; then
-            echo "Please use errors.New/errors.Wrap/errors.Wrapf/errors.Errorf"
-            echo "instead of fmt.Errorf"
+          if grep -r --include='*.go' '"github.com/pkg/errors"' . ; then
+            echo "Use the standard library errors package and fmt.Errorf with %w"
+            echo "instead of github.com/pkg/errors"
             exit 1
           fi
       - name: Exclude replace in go.mod
