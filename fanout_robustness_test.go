@@ -601,11 +601,18 @@ func TestServeDNS_ThreeServersSelectBestResponse(t *testing.T) {
 // P3 – Security & edge cases
 // ---------------------------------------------------------------------------
 
-// TestExceptFile_SymlinkIsFollowed documents that except-file follows symbolic links.
-// A symlink within the working directory pointing to a file elsewhere will be read.
-// This is the current behavior; the test exists to make it explicit and detectable
-// if the security posture changes in the future.
-func TestExceptFile_SymlinkIsFollowed(t *testing.T) {
+// TestExceptFile_SymlinkEscapingWorkdirIsRejected pins the containment guarantee for
+// relative except-file paths: a symlink inside the working directory whose target lies
+// outside it is refused, not followed.
+//
+// This used to assert the opposite. The hand-rolled filepath.Rel check only inspected the
+// spelling of the path, so a symlink walked straight past the "path escapes working
+// directory" error it was supposed to trigger. Resolution now goes through os.Root, which
+// evaluates every component - symlinks included - against the root.
+//
+// A list kept elsewhere on the filesystem is still perfectly loadable: give an absolute
+// path, which is exempt by design. See TestExceptFile_AbsolutePathOutsideWorkdirIsAllowed.
+func TestExceptFile_SymlinkEscapingWorkdirIsRejected(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlinks require elevated privileges on Windows")
 	}
@@ -625,10 +632,26 @@ func TestExceptFile_SymlinkIsFollowed(t *testing.T) {
 
 	source := "fanout . 127.0.0.1 {\nexcept-file " + symlinkName + "\n}"
 	c := caddy.NewTestController("dns", source)
+	_, parseErr := parseFanout(c)
+	require.Error(t, parseErr, "a symlink leaving the working directory must be refused")
+	require.ErrorContains(t, parseErr, "escapes",
+		"the error should name containment as the reason")
+}
+
+// TestExceptFile_AbsolutePathOutsideWorkdirIsAllowed is the counterpart to the test above:
+// containment applies to relative paths, while an absolute path is an explicit decision by
+// the Corefile author and remains the supported way to load a list from anywhere.
+func TestExceptFile_AbsolutePathOutsideWorkdirIsAllowed(t *testing.T) {
+	targetDir := t.TempDir()
+	targetPath := filepath.Join(targetDir, "domains.txt")
+	require.NoError(t, os.WriteFile(targetPath, []byte("absolute-target.example.com."), 0o600))
+
+	source := "fanout . 127.0.0.1 {\nexcept-file " + targetPath + "\n}"
+	c := caddy.NewTestController("dns", source)
 	f, parseErr := parseFanout(c)
-	require.NoError(t, parseErr, "symlinks in CWD are accepted")
-	require.True(t, f.ExcludeDomains.Contains("symlink-target.example.com."),
-		"domain from symlinked file must be loaded")
+	require.NoError(t, parseErr, "absolute paths stay exempt from containment")
+	require.True(t, f.ExcludeDomains.Contains("absolute-target.example.com."),
+		"domain from the absolute-path file must be loaded")
 }
 
 // TestDomain_VeryLongDomainName verifies that the Domain trie handles domain names at and
