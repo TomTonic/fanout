@@ -19,6 +19,7 @@ package fanout
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -107,16 +108,16 @@ func bootstrapQUICDial(bootstrap *bootstrapConfig) func(ctx context.Context, add
 			tlsCfg = tlsCfg.Clone()
 			tlsCfg.ServerName = hostname
 		}
-		var lastErr error
+		var errs []error
 		for _, resolved := range resolvedAddrs {
 			conn, err := quic.DialAddrEarly(ctx, resolved, tlsCfg, cfg)
 			if err == nil {
 				return conn, nil
 			}
-			lastErr = err
+			errs = append(errs, err)
 		}
-		if lastErr != nil {
-			return nil, fmt.Errorf("bootstrap QUIC dial to %s failed: %w", addr, lastErr)
+		if err := errors.Join(errs...); err != nil {
+			return nil, fmt.Errorf("bootstrap QUIC dial to %s failed: %w", addr, err)
 		}
 		return nil, fmt.Errorf("bootstrap QUIC dial to %s failed: no addresses resolved", addr)
 	}
