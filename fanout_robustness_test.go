@@ -403,10 +403,15 @@ func TestServeDNS_WriteFormErrErrorPropagates(t *testing.T) {
 // but terminates cleanly once the configured timeout expires, returning ServerFailure.
 func TestServeDNS_InfiniteRetryWithContextTimeout(t *testing.T) {
 	defer goleak.VerifyNone(t)
+	// The handler must never answer, but it must not outlive the test either: dns.Server
+	// .Shutdown waits for in-flight handlers, so a fixed sleep here would be charged to
+	// s.close(). Blocking on a channel lets the test release it instead.
+	unblock := make(chan struct{})
 	s := newServer(TCP, func(_ dns.ResponseWriter, _ *dns.Msg) {
-		time.Sleep(10 * time.Second) // never respond in time
+		<-unblock // never respond in time
 	})
-	defer s.close()
+	defer s.close()       // runs last
+	defer close(unblock)  // runs first, so the handler is gone before Shutdown
 
 	f := New()
 	f.From = "."

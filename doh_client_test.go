@@ -289,11 +289,20 @@ func TestDoHClientBadContentType(t *testing.T) { //nolint:dupl // test for bad c
 // TestDoHClientContextCancellation verifies that the DoH client immediately returns
 // an error when the request context is cancelled before the server responds.
 func TestDoHClientContextCancellation(t *testing.T) {
-	// Server that sleeps longer than the context deadline to force cancellation.
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
-		time.Sleep(30 * time.Second)
+	// Server that never responds, so the client's context deadline is what ends the
+	// request. httptest.Server.Close waits for outstanding handlers, so a fixed sleep
+	// here would be charged to the test. The request context alone is not a reliable
+	// release signal (the server does not always observe the client abort), so unblock
+	// is the deterministic backstop.
+	unblock := make(chan struct{})
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-unblock:
+		}
 	}))
-	defer srv.Close()
+	defer srv.Close()    // runs last
+	defer close(unblock) // runs first, so the handler is gone before Close
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", testServerClientTLS(srv))
 
