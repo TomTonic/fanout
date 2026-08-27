@@ -21,8 +21,11 @@ golangci-lint run       # Run linter (uses .golangci.yaml)
 - Use `golangci-lint` with the project's `.golangci.yaml` configuration.
 - Keep functions focused and under 60 lines where practical.
 - Prefer returning errors over panicking.
-- Use the repository-standard error helpers from `github.com/pkg/errors`
-   (`errors.Wrap`, `errors.Wrapf`, `errors.Errorf`). CI rejects `fmt.Errorf`.
+- Use the standard library for errors: `errors.New`, `fmt.Errorf` with `%w` to
+  wrap, `errors.Join` to report several failed attempts, `errors.Is` /
+  `errors.AsType` to inspect. CI rejects `github.com/pkg/errors` via depguard.
+  This matches CoreDNS itself, whose `plugin.Error` wraps with `%w`, so an
+  `errors.Is` from a caller reaches through the whole chain.
 - Do not use `panic()` in library code.
 
 ### Function and Method Documentation
@@ -74,7 +77,10 @@ comment explaining *why* the helper exists is expected.
 - Use table-driven tests where appropriate.
 - Maintain at least 80% test coverage.
 - Run `go test ./... -race` before submitting changes.
-- Fuzz tests are welcome for functions that parse external input.
+- Fuzz tests are welcome for functions that parse external input. Two targets
+  exist and both run in CI: `FuzzDomainAddAndContains` (exclusion trie) and
+  `FuzzServeDNS` (arbitrary bytes through the whole plugin). Run one locally
+  with `go test -run '^$' -fuzz FuzzServeDNS -fuzztime 60s .`
 
 ### Test Documentation
 
@@ -129,7 +135,8 @@ that reads as an assertion (e.g. `"returns error for empty input"`).
 
 ## CI/CD
 
-- All pushes and PRs are checked by: golangci-lint, go vet, go test, CodeQL.
+- All pushes and PRs are checked by: golangci-lint, go vet, go test, a short
+  fuzzing pass over both targets, and CodeQL.
 - Coverage is tracked via gist-based badges.
 - Dependency updates are automated via Renovate with automerge for patches
   and minor updates.
