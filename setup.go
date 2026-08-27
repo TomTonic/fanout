@@ -19,8 +19,11 @@
 package fanout
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -36,7 +39,6 @@ import (
 	"github.com/coredns/coredns/plugin/pkg/parse"
 	"github.com/coredns/coredns/plugin/pkg/tls"
 	"github.com/coredns/coredns/plugin/pkg/transport"
-	"github.com/pkg/errors"
 )
 
 const (
@@ -106,7 +108,7 @@ func setup(c *caddy.Controller) error {
 	}
 	l := len(f.clients)
 	if l > maxIPCount {
-		return plugin.Error(pluginName, errors.Errorf("more than %d TOs configured: %d", maxIPCount, l))
+		return plugin.Error(pluginName, fmt.Errorf("more than %d TOs configured: %d", maxIPCount, l))
 	}
 
 	dnsserver.GetConfig(c).AddPlugin(func(next plugin.Handler) plugin.Handler {
@@ -172,7 +174,7 @@ func parseFanoutStanza(c *caddyfile.Dispenser) (*Fanout, error) {
 
 	normalized := plugin.Host(f.From).NormalizeExact()
 	if len(normalized) == 0 {
-		return nil, errors.Errorf("unable to normalize '%s'", f.From)
+		return nil, fmt.Errorf("unable to normalize '%s'", f.From)
 	}
 	f.From = normalized[0]
 
@@ -300,7 +302,7 @@ func initServerSelectionPolicy(f *Fanout) error {
 
 	loadFactor := f.loadFactor
 	if len(loadFactor) == 0 {
-		for i := 0; i < len(f.clients); i++ {
+		for range f.clients {
 			loadFactor = append(loadFactor, maxLoadFactor)
 		}
 	}
@@ -343,7 +345,7 @@ var parseRegistry = map[string]func(*Fanout, *caddyfile.Dispenser) error{
 func parseValue(v string, f *Fanout, c *caddyfile.Dispenser) error {
 	handler, ok := parseRegistry[v]
 	if !ok {
-		return errors.Errorf("unknown property %v", v)
+		return fmt.Errorf("unknown property %v", v)
 	}
 	return handler(f, c)
 }
@@ -375,7 +377,7 @@ func parsePolicy(f *Fanout, c *caddyfile.Dispenser) error {
 
 	policyType := strings.ToLower(c.Val())
 	if policyType != policyWeightedRandom && policyType != policySequential {
-		return errors.Errorf("unknown policy %q", c.Val())
+		return fmt.Errorf("unknown policy %q", c.Val())
 	}
 	f.policyType = policyType
 
@@ -393,10 +395,10 @@ func parseTimeout(f *Fanout, c *caddyfile.Dispenser) error {
 		return err
 	}
 	if f.Timeout < minTimeout {
-		return errors.Errorf("timeout %s is too small, minimum is %s", val, minTimeout)
+		return fmt.Errorf("timeout %s is too small, minimum is %s", val, minTimeout)
 	}
 	if f.Timeout > maxTimeout {
-		return errors.Errorf("timeout %s is too large, maximum is %s", val, maxTimeout)
+		return fmt.Errorf("timeout %s is too large, maximum is %s", val, maxTimeout)
 	}
 	return nil
 }
@@ -431,7 +433,9 @@ func parseBootstrap(f *Fanout, c *caddyfile.Dispenser) error {
 		if err != nil {
 			return c.Errf("invalid bootstrap address %q: %v", a, err)
 		}
-		if net.ParseIP(host) == nil {
+		// Validation only - the parsed value is discarded, so netip.ParseAddr is
+		// preferable to net.ParseIP, which allocates a 16-byte slice just to throw away.
+		if _, err := netip.ParseAddr(host); err != nil {
 			return c.Errf("bootstrap address must be an IP literal: %q", host)
 		}
 		addrs = append(addrs, a)
@@ -465,6 +469,40 @@ func parseECS(f *Fanout, c *caddyfile.Dispenser) error {
 	return nil
 }
 
+// readExceptFile reads an except-file, keeping relative paths confined to the working
+// directory.
+//
+// Containment is delegated to os.Root rather than compared by hand. The previous
+// filepath.Rel check could be walked straight past by a symlink pointing out of the
+// working directory, so the "path escapes working directory" error it promised was not
+// actually enforced; it also left a window between the check and the read in which the
+// path could change. os.Root resolves every component under the root, symlinks included,
+// and rejects anything that leaves it.
+//
+// Absolute paths stay exempt: they are an explicit choice by whoever wrote the Corefile,
+// and they remain the supported way to load a list from elsewhere on the filesystem.
+func readExceptFile(cleanPath string) ([]byte, error) {
+	if filepath.IsAbs(cleanPath) {
+		return os.ReadFile(cleanPath)
+	}
+
+	workDir, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(workDir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close() //nolint:errcheck // read-only handle
+
+	b, err := root.ReadFile(cleanPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading except-file %q: %w", cleanPath, err)
+	}
+	return b, nil
+}
+
 func parseIgnoredFromFile(f *Fanout, c *caddyfile.Dispenser) error {
 	args := c.RemainingArgs()
 	if len(args) != 1 {
@@ -472,33 +510,17 @@ func parseIgnoredFromFile(f *Fanout, c *caddyfile.Dispenser) error {
 	}
 	cleanPath := filepath.Clean(args[0])
 	if !filepath.IsAbs(cleanPath) && !filepath.IsLocal(cleanPath) {
-		return errors.Errorf("path must be local: %q", args[0])
+		return fmt.Errorf("path must be local: %q", args[0])
 	}
-	readPath := cleanPath
-	if !filepath.IsAbs(cleanPath) {
-		workDir, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		absPath := filepath.Join(workDir, cleanPath)
-		relPath, err := filepath.Rel(workDir, absPath)
-		if err != nil {
-			return err
-		}
-		if relPath == ".." || strings.HasPrefix(relPath, ".."+string(os.PathSeparator)) {
-			return errors.Errorf("path escapes working directory: %q", args[0])
-		}
-		readPath = absPath
-	}
-	b, err := os.ReadFile(readPath)
+
+	b, err := readExceptFile(cleanPath)
 	if err != nil {
 		return err
 	}
-	names := strings.Split(string(b), "\n")
-	for i := range names {
-		normalized := plugin.Host(names[i]).NormalizeExact()
+	for name := range strings.SplitSeq(string(b), "\n") {
+		normalized := plugin.Host(name).NormalizeExact()
 		if len(normalized) == 0 {
-			return errors.Errorf("unable to normalize '%s'", names[i])
+			return fmt.Errorf("unable to normalize '%s'", name)
 		}
 		f.ExcludeDomains.AddString(normalized[0])
 	}
@@ -513,7 +535,7 @@ func parseIgnored(f *Fanout, c *caddyfile.Dispenser) error {
 	for i := range ignore {
 		normalized := plugin.Host(ignore[i]).NormalizeExact()
 		if len(normalized) == 0 {
-			return errors.Errorf("unable to normalize '%s'", ignore[i])
+			return fmt.Errorf("unable to normalize '%s'", ignore[i])
 		}
 		f.ExcludeDomains.AddString(normalized[0])
 	}
@@ -528,7 +550,7 @@ func parseWorkerCount(f *Fanout, c *caddyfile.Dispenser) error {
 			return errors.New("worker count should be more or equal 2. Consider to use Forward plugin")
 		}
 		if f.WorkerCount > maxWorkerCount {
-			return errors.Errorf("worker count more then max value: %v", maxWorkerCount)
+			return fmt.Errorf("worker count more then max value: %v", maxWorkerCount)
 		}
 	}
 	return err
@@ -550,7 +572,7 @@ func parseLoadFactor(f *Fanout, c *caddyfile.Dispenser) error {
 			return errors.New("load-factor should be more or equal 1")
 		}
 		if loadFactor > maxLoadFactor {
-			return errors.Errorf("load-factor %d should be less than %d", loadFactor, maxLoadFactor)
+			return fmt.Errorf("load-factor %d should be less than %d", loadFactor, maxLoadFactor)
 		}
 
 		f.loadFactor = append(f.loadFactor, loadFactor)

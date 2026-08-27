@@ -20,12 +20,14 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/coredns/caddy"
@@ -33,9 +35,7 @@ import (
 	"github.com/coredns/coredns/plugin/test"
 	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
-	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/goleak"
 )
 
 // TestConfigSummary verifies that the startup config summary renders the effective
@@ -43,6 +43,7 @@ import (
 // attempts and the default sequential policy when none is configured.
 func TestConfigSummary(t *testing.T) {
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = UDP
 	f.Timeout = 2 * time.Second
@@ -72,8 +73,9 @@ func TestConfigSummary(t *testing.T) {
 // Client may mutate it. The test fans out to two upstreams and asserts the
 // request message is byte-identical before and after ServeDNS.
 func TestServeDNS_DoesNotMutateSharedRequest(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	verifyNoLeaks(t)
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.Attempts = 1
 	readOnly := func(_ context.Context, r *request.Request) (*dns.Msg, error) {
@@ -116,8 +118,9 @@ func (nilClientPolicy) selector([]Client) clientSelector { return nilClientSelec
 // Client is skipped by the producer instead of panicking in a worker. The query
 // ends as a no_response failure because no upstream is actually contacted.
 func TestServeDNS_NilClientPickDoesNotPanic(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	verifyNoLeaks(t)
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.Attempts = 1
 	f.AddClient(metricsClientStub{endpoint: "unused.invalid:53", network: UDP, request: func(context.Context, *request.Request) (*dns.Msg, error) {
@@ -137,35 +140,63 @@ func TestServeDNS_NilClientPickDoesNotPanic(t *testing.T) {
 // TestServeDNS_CancelsLosingUpstreamsPromptly verifies that once a winner is
 // selected, the still-running losing upstream is cancelled immediately rather
 // than lingering until the (here deliberately long) timeout elapses.
+//
+// This runs inside a synctest bubble because the property is about ordering, not
+// duration. It previously raced a real two-second timer against the cancellation and
+// failed under machine load; synctest.Wait blocks until every goroutine in the bubble
+// is durably blocked, so "was the loser cancelled" becomes a settled question rather
+// than a deadline to beat. Only stub clients are involved, so nothing in the bubble
+// touches the network. goleak is not needed here: synctest.Test already waits for all
+// bubble goroutines to exit and fails the test if they deadlock.
 func TestServeDNS_CancelsLosingUpstreamsPromptly(t *testing.T) {
-	defer goleak.VerifyNone(t)
-	f := New()
-	f.From = "."
-	f.Attempts = 1
-	f.Timeout = 30 * time.Second // the loser would block far past the test budget if not cancelled
+	synctest.Test(t, func(t *testing.T) {
+		f := New()
+		shutdownAfterTest(t, f)
+		f.From = "."
+		f.Attempts = 1
+		f.Timeout = 30 * time.Second // the loser would block far past the test budget if not cancelled
 
-	loserCancelled := make(chan struct{})
-	f.AddClient(metricsClientStub{endpoint: "winner.invalid:53", network: UDP, request: func(_ context.Context, r *request.Request) (*dns.Msg, error) {
-		resp := new(dns.Msg)
-		resp.SetReply(r.Req)
-		return resp, nil
-	}})
-	f.AddClient(metricsClientStub{endpoint: "loser.invalid:53", network: UDP, request: func(ctx context.Context, _ *request.Request) (*dns.Msg, error) {
-		<-ctx.Done()
-		close(loserCancelled)
-		return nil, ctx.Err()
-	}})
+		var loserStarted atomic.Bool
+		loserCancelled := make(chan struct{})
+		f.AddClient(metricsClientStub{endpoint: "winner.invalid:53", network: UDP, request: func(_ context.Context, r *request.Request) (*dns.Msg, error) {
+			resp := new(dns.Msg)
+			resp.SetReply(r.Req)
+			return resp, nil
+		}})
+		f.AddClient(metricsClientStub{endpoint: "loser.invalid:53", network: UDP, request: func(ctx context.Context, _ *request.Request) (*dns.Msg, error) {
+			loserStarted.Store(true)
+			<-ctx.Done()
+			close(loserCancelled)
+			return nil, ctx.Err()
+		}})
 
-	req := new(dns.Msg)
-	req.SetQuestion("example.org.", dns.TypeA)
-	_, err := f.ServeDNS(context.Background(), &test.ResponseWriter{}, req)
-	require.NoError(t, err)
+		req := new(dns.Msg)
+		req.SetQuestion("example.org.", dns.TypeA)
+		start := time.Now()
+		_, err := f.ServeDNS(context.Background(), &test.ResponseWriter{}, req)
+		require.NoError(t, err)
+		elapsed := time.Since(start)
 
-	select {
-	case <-loserCancelled:
-	case <-time.After(2 * time.Second):
-		t.Fatal("losing upstream was not cancelled promptly after a winner was selected")
-	}
+		// Let every remaining bubble goroutine run to its blocking point.
+		synctest.Wait()
+
+		// The property under test: answering does not wait on the loser. On the bubble's
+		// clock the winner's answer costs nothing, so any delay here would be the 30s
+		// timeout being served out.
+		require.Zero(t, elapsed, "ServeDNS must return on the winner, not wait out the timeout")
+
+		// Whether the loser ever reaches its Request call is a scheduling detail:
+		// processClient checks ctx.Err() before dialing, so a loser cancelled early
+		// enough is skipped entirely. Both outcomes satisfy "not left running" - but if
+		// it did start, it must have been unblocked rather than stranded.
+		if loserStarted.Load() {
+			select {
+			case <-loserCancelled:
+			default:
+				t.Fatal("the losing upstream started but was never cancelled")
+			}
+		}
+	})
 }
 
 // ---------- 2. ServeDNS: Race mode, Domain mismatch, FormatError ----------
@@ -174,11 +205,11 @@ func TestServeDNS_CancelsLosingUpstreamsPromptly(t *testing.T) {
 // the plugin returns the first successful response without waiting for all servers.
 // Sets up two slow servers (200 ms each) and asserts that exactly one answer is returned with RcodeSuccess.
 func TestServeDNS_RaceMode(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	verifyNoLeaks(t)
 	var answered atomic.Int32
 
 	// Two slow servers – race mode should return the first successful response
-	s1 := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+	s1 := newServer(t, TCP, func(w dns.ResponseWriter, r *dns.Msg) {
 		time.Sleep(200 * time.Millisecond)
 		msg := new(dns.Msg)
 		msg.SetReply(r)
@@ -186,8 +217,7 @@ func TestServeDNS_RaceMode(t *testing.T) {
 		answered.Add(1)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer s1.close()
-	s2 := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+	s2 := newServer(t, TCP, func(w dns.ResponseWriter, r *dns.Msg) {
 		time.Sleep(200 * time.Millisecond)
 		msg := new(dns.Msg)
 		msg.SetReply(r)
@@ -195,9 +225,9 @@ func TestServeDNS_RaceMode(t *testing.T) {
 		answered.Add(1)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer s2.close()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.Race = true
 	f.net = TCP
@@ -217,27 +247,26 @@ func TestServeDNS_RaceMode(t *testing.T) {
 // with race enabled and race-continue-on-error disabled (default), fanout returns the
 // first DNS response even when it carries a non-success RCODE such as SERVFAIL.
 func TestServeDNS_RaceMode_DefaultReturnsFirstErrorResponse(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	verifyNoLeaks(t)
 
 	// Fast server returns SERVFAIL.
-	s1 := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+	s1 := newServer(t, TCP, func(w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		msg.SetRcode(r, dns.RcodeServerFailure)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer s1.close()
 
 	// Slow server returns SUCCESS.
-	s2 := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+	s2 := newServer(t, TCP, func(w dns.ResponseWriter, r *dns.Msg) {
 		time.Sleep(150 * time.Millisecond)
 		msg := new(dns.Msg)
 		msg.SetReply(r)
 		msg.Answer = append(msg.Answer, test.A("example1. IN A 10.0.0.2"))
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer s2.close()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.Race = true
 	f.net = TCP
@@ -267,25 +296,23 @@ func TestServeDNS_RaceMode_ContinueOnErrorResponseReturnsNXDOMAIN(t *testing.T) 
 }
 
 func testRaceContinueOnErrorTerminalResponse(t *testing.T, fastRcode, expectedRcode int) {
-	defer goleak.VerifyNone(t)
+	verifyNoLeaks(t)
 
 	// Fast server returns the candidate terminal RCODE.
-	s1 := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+	s1 := newServer(t, TCP, func(w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		msg.SetRcode(r, fastRcode)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer s1.close()
 
 	// Slow server returns SUCCESS and only wins when the fast response is not terminal.
-	s2 := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+	s2 := newServer(t, TCP, func(w dns.ResponseWriter, r *dns.Msg) {
 		time.Sleep(150 * time.Millisecond)
 		msg := new(dns.Msg)
 		msg.SetReply(r)
 		msg.Answer = append(msg.Answer, test.A("example1. IN A 10.0.0.3"))
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer s2.close()
 
 	f := New()
 	f.From = "."
@@ -308,8 +335,9 @@ func testRaceContinueOnErrorTerminalResponse(t *testing.T, fastRcode, expectedRc
 // match the configured From zone, the plugin must delegate to the next plugin in the chain.
 // Configures From="example.org.", sends a query for "other.com.", and verifies the next handler is invoked.
 func TestServeDNS_DomainMismatch_CallsNext(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	verifyNoLeaks(t)
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = exampleOrgFQDN
 	f.Next = plugin.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
 		msg := new(dns.Msg)
@@ -333,9 +361,10 @@ func TestServeDNS_DomainMismatch_CallsNext(t *testing.T) {
 // exclusion list, the plugin skips fanout and calls the next handler in the chain.
 // Adds "blocked.example.com." to ExcludeDomains, queries it, and asserts the next handler was called.
 func TestServeDNS_ExcludeDomain_CallsNext(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	verifyNoLeaks(t)
 	nextCalled := false
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.ExcludeDomains.AddString("blocked.example.com.")
 	f.Next = plugin.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
@@ -357,9 +386,9 @@ func TestServeDNS_ExcludeDomain_CallsNext(t *testing.T) {
 // question section does not match the original request, the plugin detects the mismatch via
 // req.Match() and returns FORMERR to the client instead of forwarding the bogus response.
 func TestServeDNS_FormatError_MismatchedId(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	verifyNoLeaks(t)
 	// Server responds with a different question name to trigger !req.Match()
-	s := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+	s := newServer(t, TCP, func(w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		msg.SetReply(r)
 		// Tamper the question to cause a mismatch
@@ -367,9 +396,9 @@ func TestServeDNS_FormatError_MismatchedId(t *testing.T) {
 		msg.Answer = append(msg.Answer, test.A("wrong.example. IN A 1.2.3.4"))
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer s.close()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.AddClient(NewClient(s.addr, TCP))
@@ -457,14 +486,19 @@ func TestExceptFile_TooManyArguments(t *testing.T) {
 // the configured timeout expires, ServeDNS returns RcodeServerFailure and an error.
 // Uses a server that sleeps 10 s with a 500 ms plugin timeout.
 func TestServeDNS_AllServersTimeout(t *testing.T) {
-	defer goleak.VerifyNone(t)
-	// Server never responds
-	s := newServer(TCP, func(_ dns.ResponseWriter, _ *dns.Msg) {
-		time.Sleep(10 * time.Second)
+	verifyNoLeaks(t)
+	// Server never responds. Blocking on a channel rather than sleeping keeps
+	// dns.Server.Shutdown from waiting out a timer that the test no longer needs.
+	unblock := make(chan struct{})
+	s := newServer(t, TCP, func(_ dns.ResponseWriter, _ *dns.Msg) {
+		<-unblock
 	})
-	defer s.close()
+	// Releasing the handler is all this test owns; newServer's cleanup shuts the
+	// server down afterwards, since cleanups run after defers.
+	defer close(unblock)
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.Timeout = 500 * time.Millisecond
@@ -482,16 +516,16 @@ func TestServeDNS_AllServersTimeout(t *testing.T) {
 // TestServeDNS_ContextCancelledBeforeRequest verifies that when the caller's context is already
 // cancelled before ServeDNS runs, the plugin returns RcodeServerFailure immediately without hanging.
 func TestServeDNS_ContextCancelledBeforeRequest(t *testing.T) {
-	defer goleak.VerifyNone(t)
-	s := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+	verifyNoLeaks(t)
+	s := newServer(t, TCP, func(w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		msg.SetReply(r)
 		msg.Answer = append(msg.Answer, test.A("example1. IN A 10.0.0.1"))
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer s.close()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.Timeout = 5 * time.Second
@@ -511,17 +545,17 @@ func TestServeDNS_ContextCancelledBeforeRequest(t *testing.T) {
 // If every attempt to a server fails (connection closed), the plugin retries up to Attempts times.
 // With Attempts=2, asserts the error contains "attempt limit has been reached" and rcode is ServerFailure.
 func TestProcessClient_AttemptLimitReached(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	verifyNoLeaks(t)
 	// Server that always closes connection (causes error on client)
-	s := newServer(TCP, func(w dns.ResponseWriter, _ *dns.Msg) {
+	s := newServer(t, TCP, func(w dns.ResponseWriter, _ *dns.Msg) {
 		conn, ok := w.(interface{ Close() error })
 		if ok {
 			_ = conn.Close()
 		}
 	})
-	defer s.close()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.Attempts = 2
@@ -548,7 +582,7 @@ func TestProcessClient_AttemptLimitReached(t *testing.T) {
 // Creates a TLS DNS server with a self-signed certificate, configures a client with
 // InsecureSkipVerify, sends a query, and verifies a successful response is returned.
 func TestServeDNS_TLS(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	verifyNoLeaks(t)
 
 	// Generate self-signed cert for testing
 	certFile, keyFile, cleanup := generateSelfSignedCert(t)
@@ -593,6 +627,7 @@ func TestServeDNS_TLS(t *testing.T) {
 	c.SetTLSConfig(clientTLSConfig)
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCPTLS
 	f.AddClient(c)
@@ -617,6 +652,7 @@ func TestSetup_TLSConfig(t *testing.T) {
 }`, certFile, keyFile)
 	c := caddy.NewTestController("dns", source)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 	require.NoError(t, err)
 	require.NotNil(t, f.tlsConfig)
 }
@@ -629,6 +665,7 @@ func TestSetup_TLSServer(t *testing.T) {
 }`
 	c := caddy.NewTestController("dns", source)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 	require.NoError(t, err)
 	require.Equal(t, "myserver.example.com", f.tlsServerName)
 }
@@ -642,6 +679,7 @@ func TestSetup_TLSServernameAlias(t *testing.T) {
 }`
 	c := caddy.NewTestController("dns", source)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 	require.NoError(t, err)
 	require.Equal(t, "myserver.example.com", f.tlsServerName)
 }
@@ -653,6 +691,7 @@ func TestSetup_Race(t *testing.T) {
 }`
 	c := caddy.NewTestController("dns", source)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 	require.NoError(t, err)
 	require.True(t, f.Race)
 }
@@ -727,6 +766,7 @@ func TestClient_NetAndEndpoint(t *testing.T) {
 // for plugin identification and logging.
 func TestFanout_Name(t *testing.T) {
 	f := New()
+	shutdownAfterTest(t, f)
 	require.Equal(t, "fanout", f.Name())
 }
 

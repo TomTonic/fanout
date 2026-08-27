@@ -63,7 +63,7 @@ func (wrs *WeightedRand[T]) Pick() T {
 	rNum := rand.IntN(wrs.totalWeight) + 1
 
 	sum := 0
-	for i := 0; i < len(wrs.values); i++ {
+	for i := range wrs.values {
 		sum += wrs.weights[i]
 		if sum >= rNum {
 			wrs.totalWeight -= wrs.weights[i]

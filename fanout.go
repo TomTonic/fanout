@@ -19,8 +19,10 @@
 package fanout
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -32,10 +34,14 @@ import (
 	clog "github.com/coredns/coredns/plugin/pkg/log"
 	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
-	"github.com/pkg/errors"
 )
 
 var log = clog.NewWithPlugin("fanout")
+
+// errNoAttemptsConfigured reports that processClient was asked to contact an upstream
+// without a single attempt being permitted, i.e. Fanout.Attempts was set to a negative
+// value programmatically.
+var errNoAttemptsConfigured = errors.New("no attempts configured")
 
 // Fanout represents a plugin instance that can do async requests to list of DNS servers.
 type Fanout struct {
@@ -131,14 +137,14 @@ func (f *Fanout) ServeDNS(ctx context.Context, w dns.ResponseWriter, m *dns.Msg)
 		formerr := new(dns.Msg)
 		formerr.SetRcode(req.Req, dns.RcodeFormatError)
 		if err := w.WriteMsg(formerr); err != nil {
-			return dns.RcodeFormatError, plugin.Error(f.Name(), errors.Wrap(err, "failed to write format error response"))
+			return dns.RcodeFormatError, plugin.Error(f.Name(), fmt.Errorf("failed to write format error response: %w", err))
 		}
 		return 0, nil
 	}
 	observeRequestWin(result.client.Endpoint())
 	if err := w.WriteMsg(result.response); err != nil {
 		observeQueryFailure(queryFailureWriteFailed)
-		return dns.RcodeServerFailure, plugin.Error(f.Name(), errors.Wrap(err, "failed to write upstream response"))
+		return dns.RcodeServerFailure, plugin.Error(f.Name(), fmt.Errorf("failed to write upstream response: %w", err))
 	}
 	return 0, nil
 }
@@ -147,10 +153,7 @@ func (f *Fanout) ServeDNS(ctx context.Context, w dns.ResponseWriter, m *dns.Msg)
 // startup logging, so operators can confirm what fanout actually loaded without
 // re-reading the Corefile.
 func (f *Fanout) configSummary() string {
-	policyName := f.policyType
-	if policyName == "" {
-		policyName = policySequential
-	}
+	policyName := cmp.Or(f.policyType, policySequential)
 	attempts := fmt.Sprintf("%d", f.Attempts)
 	if f.Attempts == 0 {
 		attempts = "inf"
@@ -167,7 +170,7 @@ func (f *Fanout) runWorkers(ctx context.Context, req *request.Request) chan *res
 	responseCh := make(chan *response, f.serverCount)
 	go func() {
 		defer close(workerCh)
-		for i := 0; i < f.serverCount; i++ {
+		for range f.serverCount {
 			// Evaluate Pick() into a variable first. A send case in a select
 			// (workerCh <- sel.Pick()) evaluates its right-hand side even when
 			// the ctx.Done() case wins, which would silently consume and discard
@@ -189,11 +192,9 @@ func (f *Fanout) runWorkers(ctx context.Context, req *request.Request) chan *res
 
 	go func() {
 		var wg sync.WaitGroup
-		wg.Add(f.WorkerCount)
 
-		for i := 0; i < f.WorkerCount; i++ {
-			go func() {
-				defer wg.Done()
+		for range f.WorkerCount {
+			wg.Go(func() {
 				for c := range workerCh {
 					select {
 					case <-ctx.Done():
@@ -206,7 +207,7 @@ func (f *Fanout) runWorkers(ctx context.Context, req *request.Request) chan *res
 					case responseCh <- f.processClient(ctx, c, &request.Request{W: req.W, Req: req.Req}):
 					}
 				}
-			}()
+			})
 		}
 
 		wg.Wait()
@@ -262,7 +263,7 @@ func (f *Fanout) processClient(ctx context.Context, c Client, r *request.Request
 	<-delayTimer.C
 	for j := 0; j < f.Attempts || f.Attempts == 0; {
 		if ctx.Err() != nil {
-			return &response{client: c, response: nil, start: start, err: errors.Wrapf(ctx.Err(), "upstream %s", c.Endpoint())}
+			return &response{client: c, response: nil, start: start, err: fmt.Errorf("upstream %s: %w", c.Endpoint(), ctx.Err())}
 		}
 		var msg *dns.Msg
 		msg, err = c.Request(ctx, r)
@@ -276,11 +277,18 @@ func (f *Fanout) processClient(ctx context.Context, c Client, r *request.Request
 		delayTimer.Reset(attemptDelay)
 		select {
 		case <-ctx.Done():
-			return &response{client: c, response: nil, start: start, err: errors.Wrapf(ctx.Err(), "upstream %s", c.Endpoint())}
+			return &response{client: c, response: nil, start: start, err: fmt.Errorf("upstream %s: %w", c.Endpoint(), ctx.Err())}
 		case <-delayTimer.C:
 		}
 	}
-	return &response{client: c, response: nil, start: start, err: errors.Wrapf(err, "upstream %s: attempt limit has been reached", c.Endpoint())}
+	if err == nil {
+		// The loop body never ran, which only happens for a negative Attempts set
+		// programmatically (the Corefile path rejects it). Returning a response with
+		// both err and response nil would make getFanoutResult dereference a nil
+		// message, so name the condition instead.
+		err = errNoAttemptsConfigured
+	}
+	return &response{client: c, response: nil, start: start, err: fmt.Errorf("upstream %s: attempt limit has been reached: %w", c.Endpoint(), err)}
 }
 
 func (f *Fanout) logIntermediateFailure(ctx context.Context, c Client, r *request.Request, attempt int, err error) {

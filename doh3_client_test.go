@@ -164,21 +164,27 @@ func newDoH3TestServer(t *testing.T, handler dns.HandlerFunc) *doh3TestServer { 
 		_ = h3Server.Serve(conn)
 	}()
 
-	return &doh3TestServer{
+	srv := &doh3TestServer{
 		server:    h3Server,
 		conn:      conn,
 		addr:      conn.LocalAddr().String(),
 		clientTLS: clientTLS,
 		certPEM:   certPEM,
 	}
+	// Shut down via t.Cleanup so callers need no defer. Cleanups run after the
+	// test's own defers, so a handler released by defer is gone before shutdown.
+	t.Cleanup(srv.close)
+	return srv
 }
 
 // closeDoH3Client shuts down the underlying QUIC transport(s) so that their background goroutines
-// are cleaned up. This includes any orphaned transports from previous SetTLSConfig calls.
+// are cleaned up. This includes any orphaned transports from previous SetTLSConfig calls, and the
+// grace-period goroutines still waiting to close them — hence Close rather than closeTransports,
+// which would leave those waiting for the full delay and trip goleak in a later test.
 func closeDoH3Client(t *testing.T, c Client) {
 	t.Helper()
 	if dc, ok := c.(*doh3Client); ok {
-		dc.closeTransports()
+		require.NoError(t, dc.Close())
 	}
 }
 
@@ -194,7 +200,6 @@ func TestDoH3ClientBasicRequest(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -222,7 +227,6 @@ func TestDoH3ClientNXDOMAIN(t *testing.T) {
 		msg.SetRcode(r, dns.RcodeNameError)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -250,7 +254,6 @@ func TestDoH3ClientMultipleRecords(t *testing.T) {
 		)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -277,7 +280,6 @@ func TestDoH3ClientAAAARecord(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -305,7 +307,6 @@ func TestDoH3ClientSERVFAIL(t *testing.T) {
 		msg.SetRcode(r, dns.RcodeServerFailure)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -334,7 +335,6 @@ func TestDoH3ClientIDPreservation(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -365,7 +365,6 @@ func TestDoH3ClientPreservesFlags(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -392,7 +391,6 @@ func TestDoH3ClientEmptyResponse(t *testing.T) {
 		msg.SetReply(r)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -421,7 +419,6 @@ func TestDoH3ClientTXTRecord(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -453,7 +450,6 @@ func TestDoH3ClientConcurrentRequests(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -554,7 +550,6 @@ func TestDoH3ClientSetTLSConfigConcurrent(t *testing.T) {
 		msg.SetReply(r)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	c := newDoH3ClientWithTLS("https://"+srv.addr+"/dns-query", srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -611,11 +606,13 @@ func TestDoH3ClientServerDown(t *testing.T) {
 
 // TestDoH3ClientContextCancellation verifies that a cancelled context aborts the HTTP/3 request.
 func TestDoH3ClientContextCancellation(t *testing.T) {
+	// Handler never answers, so the context timeout is what ends the request. Blocking
+	// on a channel instead of sleeping lets the test release it before srv.close().
+	unblock := make(chan struct{})
 	srv := newDoH3TestServer(t, func(_ dns.ResponseWriter, _ *dns.Msg) {
-		// Slow handler: sleep longer than the context timeout.
-		time.Sleep(10 * time.Second)
+		<-unblock
 	})
-	defer srv.close()
+	defer close(unblock) // runs first, so the handler is gone before shutdown
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
@@ -658,9 +655,9 @@ func TestDoH3IntegrationWithFanout(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.close()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	doh3c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, doh3c)
@@ -720,6 +717,7 @@ func TestSetupDoH3Config(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := caddy.NewTestController("dns", tc.input)
 			f, err := parseFanout(c)
+			shutdownAfterTest(t, f)
 
 			require.NoError(t, err)
 			require.Len(t, f.clients, len(tc.expectedURLs))
@@ -739,6 +737,7 @@ func TestSetupDoH3NetworkProtocol(t *testing.T) {
 	}`
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.Equal(t, DOH3, f.net)
@@ -752,6 +751,7 @@ func TestSetupDoH3WithOptions(t *testing.T) {
 	}`
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.Len(t, f.clients, 2)
@@ -768,6 +768,7 @@ func TestSetupDoH3WithRace(t *testing.T) {
 	}`
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.True(t, f.Race)
@@ -781,6 +782,7 @@ func TestSetupDoH3WithExcept(t *testing.T) {
 	}`
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.True(t, f.ExcludeDomains.Contains("internal.example.com."))
@@ -800,6 +802,7 @@ func TestSetupDoH3CaseInsensitive(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := caddy.NewTestController("dns", tc.input)
 			f, err := parseFanout(c)
+			shutdownAfterTest(t, f)
 			require.NoError(t, err)
 			require.Len(t, f.clients, 1)
 			require.Equal(t, DOH3, f.clients[0].Net())
@@ -812,6 +815,7 @@ func TestSetupDoH3MixedWithTLS(t *testing.T) {
 	input := "fanout . tls://1.1.1.1 h3://dns.google/dns-query {\ntls-server cloudflare\n}"
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.Len(t, f.clients, 2)
@@ -843,6 +847,7 @@ func TestDoH3DoesNotBreakExistingSetup(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := caddy.NewTestController("dns", tc.input)
 			f, err := parseFanout(c)
+			shutdownAfterTest(t, f)
 			require.NoError(t, err)
 			require.Len(t, f.clients, tc.expectedN)
 			require.Equal(t, tc.expectedNet, f.net)
@@ -856,6 +861,7 @@ func TestSetupAllThreeTransports(t *testing.T) {
 	input := corefileAllDoH
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.Len(t, f.clients, 3)

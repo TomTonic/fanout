@@ -19,12 +19,14 @@ package fanout
 import (
 	"context"
 	"crypto/tls"
+	"errors"
+	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
-	"github.com/pkg/errors"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 )
@@ -33,12 +35,15 @@ import (
 // It follows RFC 8484 at the application layer while using QUIC (RFC 9000) as the transport,
 // providing reduced connection-establishment latency and improved multiplexing.
 type doh3Client struct {
-	endpoint          string           // full URL, e.g. "https://dns.google/dns-query"
-	bootstrap         *bootstrapConfig // bootstrap config for hostname resolution (nil = system default)
-	mu                sync.Mutex       // protects h3Client, transport, and retiredTransports during SetTLSConfig
-	h3Client          *http.Client
-	transport         *http3.Transport
-	retiredTransports map[*http3.Transport]struct{} // replaced transports waiting for grace-period cleanup
+	endpoint  string           // full URL, e.g. "https://dns.google/dns-query"
+	bootstrap *bootstrapConfig // bootstrap config for hostname resolution (nil = system default)
+	mu        sync.Mutex       // protects h3Client, transport, and retiredTransports during SetTLSConfig
+	h3Client  *http.Client
+	transport *http3.Transport
+	// retiredTransports holds replaced transports still inside their grace period,
+	// each mapped to the timer that will close it. Keeping the timer lets shutdown
+	// disarm it instead of leaving it pending.
+	retiredTransports map[*http3.Transport]*time.Timer
 }
 
 var doh3RetiredTransportCloseDelay = readTimeout + dialTimeout
@@ -82,7 +87,7 @@ func newDoH3ClientFull(endpoint string, tlsConfig *tls.Config, bootstrap *bootst
 		endpoint:          endpoint,
 		bootstrap:         bootstrap,
 		transport:         h3Transport,
-		retiredTransports: make(map[*http3.Transport]struct{}),
+		retiredTransports: make(map[*http3.Transport]*time.Timer),
 		h3Client: &http.Client{
 			Transport: h3Transport,
 			Timeout:   readTimeout + dialTimeout,
@@ -103,18 +108,18 @@ func bootstrapQUICDial(bootstrap *bootstrapConfig) func(ctx context.Context, add
 			tlsCfg = tlsCfg.Clone()
 			tlsCfg.ServerName = hostname
 		}
-		var lastErr error
+		var errs []error
 		for _, resolved := range resolvedAddrs {
 			conn, err := quic.DialAddrEarly(ctx, resolved, tlsCfg, cfg)
 			if err == nil {
 				return conn, nil
 			}
-			lastErr = err
+			errs = append(errs, err)
 		}
-		if lastErr != nil {
-			return nil, errors.Wrapf(lastErr, "bootstrap QUIC dial to %s failed", addr)
+		if err := errors.Join(errs...); err != nil {
+			return nil, fmt.Errorf("bootstrap QUIC dial to %s failed: %w", addr, err)
 		}
-		return nil, errors.Errorf("bootstrap QUIC dial to %s failed: no addresses resolved", addr)
+		return nil, fmt.Errorf("bootstrap QUIC dial to %s failed: no addresses resolved", addr)
 	}
 }
 
@@ -147,12 +152,6 @@ func (c *doh3Client) SetTLSConfig(cfg *tls.Config) {
 	var old *http3.Transport
 	c.mu.Lock()
 	old = c.transport
-	if old != nil {
-		if c.retiredTransports == nil {
-			c.retiredTransports = make(map[*http3.Transport]struct{})
-		}
-		c.retiredTransports[old] = struct{}{}
-	}
 	c.transport = newTransport
 	c.h3Client = newClient
 	c.mu.Unlock()
@@ -174,7 +173,9 @@ func (c *doh3Client) Endpoint() string {
 
 // Close releases resources held by this DoH3 client.
 // It closes the current and all previously abandoned QUIC transports,
-// stopping background goroutines started by quic-go.
+// stopping background goroutines started by quic-go, and disarms any pending
+// grace-period timers for retired transports.
+// It is safe to call more than once.
 func (c *doh3Client) Close() error {
 	c.closeTransports()
 	return nil
@@ -193,7 +194,8 @@ func (c *doh3Client) closeTransports() {
 	if current != nil {
 		_ = current.Close()
 	}
-	for t := range retired {
+	for t, timer := range retired {
+		timer.Stop()
 		_ = t.Close()
 	}
 }
@@ -213,15 +215,28 @@ func (c *doh3Client) closeRetiredTransport(t *http3.Transport) {
 	_ = t.Close()
 }
 
+// scheduleRetiredTransportClose closes t once the grace period has elapsed, giving
+// requests already in flight on the retired transport a chance to finish.
+//
+// The wait is a timer rather than a parked goroutine: nothing is scheduled until it
+// fires, so a client that is discarded without being closed leaves no goroutine
+// behind. Shutdown disarms the timer via closeTransports.
 func (c *doh3Client) scheduleRetiredTransportClose(t *http3.Transport) {
-	ctx, cancel := context.WithTimeout(context.Background(), doh3RetiredTransportCloseDelay)
-	go func() {
-		defer cancel()
-		<-ctx.Done()
-		if ctx.Err() == context.DeadlineExceeded {
-			c.closeRetiredTransport(t)
-		}
-	}()
+	timer := time.AfterFunc(doh3RetiredTransportCloseDelay, func() {
+		c.closeRetiredTransport(t)
+	})
+
+	c.mu.Lock()
+	if c.retiredTransports == nil {
+		// Close ran between retiring t and registering it, so nothing else will
+		// disarm the timer or close the transport. Do both here.
+		c.mu.Unlock()
+		timer.Stop()
+		_ = t.Close()
+		return
+	}
+	c.retiredTransports[t] = timer
+	c.mu.Unlock()
 }
 
 // Request sends a DNS query to the DoH server over HTTP/3 (QUIC) using HTTP POST (RFC 8484).

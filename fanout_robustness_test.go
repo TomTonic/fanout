@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	stdlog "log"
 	"net"
 	"os"
@@ -36,9 +37,7 @@ import (
 	"github.com/coredns/coredns/plugin/test"
 	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
-	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/goleak"
 )
 
 type loggingClientStub struct {
@@ -69,16 +68,16 @@ func (c loggingClientStub) SetTLSConfig(*tls.Config) {}
 // This exercises the thread-safety of the Fanout instance, the client pool,
 // the response channel, and the server-selection policy under concurrent load.
 func TestServeDNS_ConcurrentRequests(t *testing.T) {
-	defer goleak.VerifyNone(t)
-	s := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+	verifyNoLeaks(t)
+	s := newServer(t, TCP, func(w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		msg.SetReply(r)
 		msg.Answer = append(msg.Answer, test.A("example1. IN A 10.0.0.1"))
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer s.close()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.AddClient(NewClient(s.addr, TCP))
@@ -107,16 +106,16 @@ func TestServeDNS_ConcurrentRequests(t *testing.T) {
 // the metadata label "fanout/upstream" to the endpoint address of the server that provided
 // the selected response. Other plugins (e.g. logging, metrics) consume this metadata.
 func TestServeDNS_MetadataUpstream(t *testing.T) {
-	defer goleak.VerifyNone(t)
-	s := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+	verifyNoLeaks(t)
+	s := newServer(t, TCP, func(w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		msg.SetReply(r)
 		msg.Answer = append(msg.Answer, test.A("example1. IN A 10.0.0.1"))
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer s.close()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.AddClient(NewClient(s.addr, TCP))
@@ -136,14 +135,14 @@ func TestServeDNS_MetadataUpstream(t *testing.T) {
 // returns garbage bytes (not a valid DNS message) gracefully. The client's ReadMsg call
 // must return an error, the plugin must not panic, and it should return ServerFailure.
 func TestServeDNS_MalformedUpstreamResponse(t *testing.T) {
-	defer goleak.VerifyNone(t)
-	s := newServer(TCP, func(w dns.ResponseWriter, _ *dns.Msg) {
+	verifyNoLeaks(t)
+	s := newServer(t, TCP, func(w dns.ResponseWriter, _ *dns.Msg) {
 		// Write invalid DNS wire data; for TCP the dns library adds the 2-byte length prefix.
 		_, _ = w.Write([]byte{0xDE, 0xAD, 0xBE, 0xEF})
 	})
-	defer s.close()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.Attempts = 1
@@ -161,13 +160,12 @@ func TestServeDNS_MalformedUpstreamResponse(t *testing.T) {
 // fanout-specific debug option emits per-attempt upstream failure logs even when the
 // request ultimately ends with the normal final error flow.
 func TestServeDNS_DebugOptionLogsIntermediateUpstreamFailures(t *testing.T) {
-	defer goleak.VerifyNone(t)
-	s := newServer(TCP, func(w dns.ResponseWriter, _ *dns.Msg) {
+	verifyNoLeaks(t)
+	s := newServer(t, TCP, func(w dns.ResponseWriter, _ *dns.Msg) {
 		if conn, ok := w.(interface{ Close() error }); ok {
 			_ = conn.Close()
 		}
 	})
-	defer s.close()
 
 	var buf bytes.Buffer
 	oldWriter := stdlog.Writer()
@@ -183,6 +181,7 @@ func TestServeDNS_DebugOptionLogsIntermediateUpstreamFailures(t *testing.T) {
 	}()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.Debug = true
 	f.From = "."
 	f.net = TCP
@@ -221,6 +220,7 @@ func TestLogIntermediateFailure_SuppressesCancelledTransportNoise(t *testing.T) 
 	}()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.Debug = true
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -254,6 +254,7 @@ func TestLogIntermediateFailure_DeadlineExceededIncludesContextError(t *testing.
 	}()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.Debug = true
 
 	ctx, cancel := context.WithTimeout(context.Background(), 0)
@@ -295,6 +296,7 @@ func TestLogIntermediateFailure_ShowsConnectFailedClass(t *testing.T) {
 	}()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.Debug = true
 
 	req := new(dns.Msg)
@@ -314,15 +316,15 @@ func TestLogIntermediateFailure_ShowsConnectFailedClass(t *testing.T) {
 // TestServeDNS_ErrorIsWrappedForCoreDNSErrorsPlugin verifies that request-level failures are
 // returned with the standard CoreDNS plugin prefix so the errors plugin logs a clear origin.
 func TestServeDNS_ErrorIsWrappedForCoreDNSErrorsPlugin(t *testing.T) {
-	defer goleak.VerifyNone(t)
-	s := newServer(TCP, func(w dns.ResponseWriter, _ *dns.Msg) {
+	verifyNoLeaks(t)
+	s := newServer(t, TCP, func(w dns.ResponseWriter, _ *dns.Msg) {
 		if conn, ok := w.(interface{ Close() error }); ok {
 			_ = conn.Close()
 		}
 	})
-	defer s.close()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.Attempts = 1
@@ -340,16 +342,16 @@ func TestServeDNS_ErrorIsWrappedForCoreDNSErrorsPlugin(t *testing.T) {
 // TestServeDNS_WriteResponseErrorPropagates verifies that client write failures are returned to
 // CoreDNS instead of being swallowed locally, allowing the errors plugin to log them.
 func TestServeDNS_WriteResponseErrorPropagates(t *testing.T) {
-	defer goleak.VerifyNone(t)
-	s := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+	verifyNoLeaks(t)
+	s := newServer(t, TCP, func(w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		msg.SetReply(r)
 		msg.Answer = append(msg.Answer, test.A("example1. IN A 10.0.0.1"))
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer s.close()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.AddClient(NewClient(s.addr, TCP))
@@ -368,17 +370,17 @@ func TestServeDNS_WriteResponseErrorPropagates(t *testing.T) {
 // TestServeDNS_WriteFormErrErrorPropagates verifies that a FORMERR fallback write failure is
 // returned to CoreDNS instead of being logged and ignored locally.
 func TestServeDNS_WriteFormErrErrorPropagates(t *testing.T) {
-	defer goleak.VerifyNone(t)
-	s := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+	verifyNoLeaks(t)
+	s := newServer(t, TCP, func(w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		msg.SetReply(r)
 		msg.Question = []dns.Question{{Name: wrongExampleFQDN, Qclass: dns.ClassINET, Qtype: dns.TypeA}}
 		msg.Answer = append(msg.Answer, test.A(wrongExampleFQDN+" IN A 1.2.3.4"))
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer s.close()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.AddClient(NewClient(s.addr, TCP))
@@ -402,13 +404,20 @@ func TestServeDNS_WriteFormErrErrorPropagates(t *testing.T) {
 // (infinite retries) and the upstream server never responds, the plugin does not hang
 // but terminates cleanly once the configured timeout expires, returning ServerFailure.
 func TestServeDNS_InfiniteRetryWithContextTimeout(t *testing.T) {
-	defer goleak.VerifyNone(t)
-	s := newServer(TCP, func(_ dns.ResponseWriter, _ *dns.Msg) {
-		time.Sleep(10 * time.Second) // never respond in time
+	verifyNoLeaks(t)
+	// The handler must never answer, but it must not outlive the test either: dns.Server
+	// .Shutdown waits for in-flight handlers, so a fixed sleep here would be charged to
+	// s.close(). Blocking on a channel lets the test release it instead.
+	unblock := make(chan struct{})
+	s := newServer(t, TCP, func(_ dns.ResponseWriter, _ *dns.Msg) {
+		<-unblock // never respond in time
 	})
-	defer s.close()
+	// Releasing the handler is all this test owns; newServer's cleanup shuts the
+	// server down afterwards, since cleanups run after defers.
+	defer close(unblock)
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.Attempts = 0 // infinite retries
@@ -430,16 +439,16 @@ func TestServeDNS_InfiniteRetryWithContextTimeout(t *testing.T) {
 // with the TC (Truncated) bit set, the plugin forwards it as-is to the client. Unlike the
 // forward plugin, fanout does not perform automatic TCP retry on truncation.
 func TestServeDNS_TruncatedResponse(t *testing.T) {
-	defer goleak.VerifyNone(t)
-	s := newServer(UDP, func(w dns.ResponseWriter, r *dns.Msg) {
+	verifyNoLeaks(t)
+	s := newServer(t, UDP, func(w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		msg.SetReply(r)
 		msg.Truncated = true
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer s.close()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.AddClient(NewClient(s.addr, UDP))
 
@@ -457,14 +466,14 @@ func TestServeDNS_TruncatedResponse(t *testing.T) {
 // concurrently. This exercises the worker pool, response channel, context cancellation,
 // and goroutine cleanup under realistic contention.
 func TestServeDNS_ConcurrentStress_ManyServersShortTimeout(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	verifyNoLeaks(t)
 	const numServers = 8
 	const numQueries = 30
 
 	var servers []*server
 	for i := range numServers {
 		delay := time.Duration(i*50) * time.Millisecond // 0ms–350ms spread
-		s := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+		s := newServer(t, TCP, func(w dns.ResponseWriter, r *dns.Msg) {
 			time.Sleep(delay)
 			msg := new(dns.Msg)
 			msg.SetReply(r)
@@ -473,13 +482,8 @@ func TestServeDNS_ConcurrentStress_ManyServersShortTimeout(t *testing.T) {
 		})
 		servers = append(servers, s)
 	}
-	defer func() {
-		for _, s := range servers {
-			s.close()
-		}
-	}()
-
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.Timeout = 2 * time.Second
@@ -512,8 +516,8 @@ func TestServeDNS_ConcurrentStress_ManyServersShortTimeout(t *testing.T) {
 // ID first, followed by the correct one. The client must ignore the wrong ID and return the
 // matching response without error.
 func TestServeDNS_UpstreamWrongIdThenCorrectId(t *testing.T) {
-	defer goleak.VerifyNone(t)
-	s := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+	verifyNoLeaks(t)
+	s := newServer(t, TCP, func(w dns.ResponseWriter, r *dns.Msg) {
 		// 1st response: wrong ID
 		wrong := new(dns.Msg)
 		wrong.SetReply(r)
@@ -527,9 +531,9 @@ func TestServeDNS_UpstreamWrongIdThenCorrectId(t *testing.T) {
 		correct.Answer = append(correct.Answer, test.A("example1. IN A 10.0.0.1"))
 		logErrIfNotNil(w.WriteMsg(correct))
 	})
-	defer s.close()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.AddClient(NewClient(s.addr, TCP))
@@ -549,29 +553,26 @@ func TestServeDNS_UpstreamWrongIdThenCorrectId(t *testing.T) {
 // always return the successful response, exercising the integration of isBetter() in
 // getFanoutResult with more than two servers.
 func TestServeDNS_ThreeServersSelectBestResponse(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	verifyNoLeaks(t)
 	// Server 1: SERVFAIL
-	s1 := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+	s1 := newServer(t, TCP, func(w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		msg.SetRcode(r, dns.RcodeServerFailure)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer s1.close()
 	// Server 2: NXDOMAIN
-	s2 := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+	s2 := newServer(t, TCP, func(w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		msg.SetRcode(r, dns.RcodeNameError)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer s2.close()
 	// Server 3: SUCCESS
-	s3 := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+	s3 := newServer(t, TCP, func(w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		msg.SetReply(r)
 		msg.Answer = append(msg.Answer, test.A("example1. IN A 10.0.0.1"))
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer s3.close()
 
 	f := New()
 	f.From = "."
@@ -579,6 +580,7 @@ func TestServeDNS_ThreeServersSelectBestResponse(t *testing.T) {
 	f.AddClient(NewClient(s1.addr, TCP))
 	f.AddClient(NewClient(s2.addr, TCP))
 	f.AddClient(NewClient(s3.addr, TCP))
+	shutdownAfterTest(t, f)
 
 	writer := &cachedDNSWriter{ResponseWriter: new(test.ResponseWriter)}
 	for range 5 {
@@ -596,11 +598,18 @@ func TestServeDNS_ThreeServersSelectBestResponse(t *testing.T) {
 // P3 – Security & edge cases
 // ---------------------------------------------------------------------------
 
-// TestExceptFile_SymlinkIsFollowed documents that except-file follows symbolic links.
-// A symlink within the working directory pointing to a file elsewhere will be read.
-// This is the current behavior; the test exists to make it explicit and detectable
-// if the security posture changes in the future.
-func TestExceptFile_SymlinkIsFollowed(t *testing.T) {
+// TestExceptFile_SymlinkEscapingWorkdirIsRejected pins the containment guarantee for
+// relative except-file paths: a symlink inside the working directory whose target lies
+// outside it is refused, not followed.
+//
+// This used to assert the opposite. The hand-rolled filepath.Rel check only inspected the
+// spelling of the path, so a symlink walked straight past the "path escapes working
+// directory" error it was supposed to trigger. Resolution now goes through os.Root, which
+// evaluates every component - symlinks included - against the root.
+//
+// A list kept elsewhere on the filesystem is still perfectly loadable: give an absolute
+// path, which is exempt by design. See TestExceptFile_AbsolutePathOutsideWorkdirIsAllowed.
+func TestExceptFile_SymlinkEscapingWorkdirIsRejected(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlinks require elevated privileges on Windows")
 	}
@@ -620,10 +629,27 @@ func TestExceptFile_SymlinkIsFollowed(t *testing.T) {
 
 	source := "fanout . 127.0.0.1 {\nexcept-file " + symlinkName + "\n}"
 	c := caddy.NewTestController("dns", source)
+	_, parseErr := parseFanout(c)
+	require.Error(t, parseErr, "a symlink leaving the working directory must be refused")
+	require.ErrorContains(t, parseErr, "escapes",
+		"the error should name containment as the reason")
+}
+
+// TestExceptFile_AbsolutePathOutsideWorkdirIsAllowed is the counterpart to the test above:
+// containment applies to relative paths, while an absolute path is an explicit decision by
+// the Corefile author and remains the supported way to load a list from anywhere.
+func TestExceptFile_AbsolutePathOutsideWorkdirIsAllowed(t *testing.T) {
+	targetDir := t.TempDir()
+	targetPath := filepath.Join(targetDir, "domains.txt")
+	require.NoError(t, os.WriteFile(targetPath, []byte("absolute-target.example.com."), 0o600))
+
+	source := "fanout . 127.0.0.1 {\nexcept-file " + targetPath + "\n}"
+	c := caddy.NewTestController("dns", source)
 	f, parseErr := parseFanout(c)
-	require.NoError(t, parseErr, "symlinks in CWD are accepted")
-	require.True(t, f.ExcludeDomains.Contains("symlink-target.example.com."),
-		"domain from symlinked file must be loaded")
+	shutdownAfterTest(t, f)
+	require.NoError(t, parseErr, "absolute paths stay exempt from containment")
+	require.True(t, f.ExcludeDomains.Contains("absolute-target.example.com."),
+		"domain from the absolute-path file must be loaded")
 }
 
 // TestDomain_VeryLongDomainName verifies that the Domain trie handles domain names at and
@@ -662,7 +688,7 @@ func TestSetup_UnknownDirective(t *testing.T) {
 // connection after sending an incomplete response (length prefix promises more bytes than
 // delivered), the client returns an error and the plugin does not panic or hang.
 func TestServeDNS_PartialUpstreamResponse(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	verifyNoLeaks(t)
 
 	// Raw TCP server that sends a length prefix claiming 255 bytes, then closes.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -685,6 +711,7 @@ func TestServeDNS_PartialUpstreamResponse(t *testing.T) {
 	}()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.Attempts = 1
@@ -706,15 +733,15 @@ func TestServeDNS_PartialUpstreamResponse(t *testing.T) {
 // with a single upstream server over TCP. This establishes a performance baseline for
 // the full pipeline: client creation, upstream request, response selection, and writing.
 func BenchmarkServeDNS_Throughput(b *testing.B) {
-	s := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
+	s := newServer(b, TCP, func(w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		msg.SetReply(r)
 		msg.Answer = append(msg.Answer, test.A("example1. IN A 10.0.0.1"))
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer s.close()
 
 	f := New()
+	shutdownAfterTest(b, f)
 	f.From = "."
 	f.net = TCP
 	f.AddClient(NewClient(s.addr, TCP))

@@ -93,6 +93,7 @@ func TestSetup(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := caddy.NewTestController("dns", tc.input)
 			f, err := parseFanout(c)
+			shutdownAfterTest(t, f)
 			if tc.expectedErr != "" {
 				if err == nil {
 					t.Fatalf("expected error containing %q but got none", tc.expectedErr)
@@ -193,6 +194,7 @@ nameserver 10.10.255.253`), 0o600); err != nil {
 	for i, test := range tests {
 		c := caddy.NewTestController("dns", test.input)
 		f, err := parseFanout(c)
+		shutdownAfterTest(t, f)
 
 		if test.shouldErr && err == nil {
 			t.Errorf("Test %d: expected error but found %s for input %s", i, err, test.input)

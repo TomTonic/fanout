@@ -17,9 +17,9 @@
 package fanout
 
 import (
+	"errors"
 	"testing"
 
-	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,6 +62,7 @@ func TestDomain_EmptyStringHandling(t *testing.T) {
 // and serverCount, while addClient (used during setup) only appends the client.
 func TestAddClient_IncrementsCounters(t *testing.T) {
 	f := New()
+	shutdownAfterTest(t, f)
 	require.Equal(t, 0, f.WorkerCount)
 	require.Equal(t, 0, f.serverCount)
 

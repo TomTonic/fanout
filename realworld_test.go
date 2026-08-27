@@ -33,7 +33,7 @@ import (
 	"maps"
 	"net"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -93,11 +93,7 @@ func reportRealWorldSkipSummary() {
 	}
 
 	realWorldSkipReasonM.Lock()
-	reasons := make([]string, 0, len(realWorldSkipReasons))
-	for reason := range realWorldSkipReasons {
-		reasons = append(reasons, reason)
-	}
-	sort.Strings(reasons)
+	reasons := slices.Sorted(maps.Keys(realWorldSkipReasons))
 
 	reasonCount := make(map[string]int, len(realWorldSkipReasons))
 	maps.Copy(reasonCount, realWorldSkipReasons)
@@ -518,7 +514,7 @@ func TestRealWorldCloudflareAllProtocols(t *testing.T) { //nolint:gocyclo,funlen
 		}
 		// Log but don't fail if IPs differ (geo-load-balancing may cause this).
 		if len(intersection) > 0 {
-			t.Logf("All protocols agree on IP(s): %v", mapKeys(intersection))
+			t.Logf("All protocols agree on IP(s): %v", slices.Collect(maps.Keys(intersection)))
 		} else {
 			t.Logf("Note: protocols returned different IPs (geo-load-balancing); full results:")
 			for name, ips := range allIPs {
@@ -617,13 +613,4 @@ func TestRealWorldCloudflareSetupParsing(t *testing.T) {
 		"quic://"+agDoQAddr,
 	)
 	_ = inputFixed
-}
-
-// mapKeys returns the keys of a map as a string slice (for logging).
-func mapKeys(m map[string]bool) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
 }

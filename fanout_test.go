@@ -71,7 +71,15 @@ func (s *server) close() {
 	logErrIfNotNil(s.inner.Shutdown())
 }
 
-func newServer(network string, f dns.HandlerFunc) *server {
+// newServer starts a DNS test server and registers its shutdown with tb, so callers
+// do not carry a defer. It takes testing.TB rather than *testing.T because one caller
+// is a benchmark.
+//
+// Shutdown runs as a cleanup, which is after the caller's own defers. A test that
+// unblocks a parked handler by defer therefore still releases it before the server
+// waits on it in Shutdown.
+func newServer(tb testing.TB, network string, f dns.HandlerFunc) *server {
+	tb.Helper()
 	ch := make(chan bool)
 	s := &dns.Server{}
 	s.Handler = f
@@ -106,7 +114,43 @@ func newServer(network string, f dns.HandlerFunc) *server {
 	}()
 
 	<-ch
-	return &server{inner: s, addr: s.Listener.Addr().String()}
+	srv := &server{inner: s, addr: s.Listener.Addr().String()}
+	tb.Cleanup(srv.close)
+	return srv
+}
+
+// verifyNoLeaks asserts that a test leaves behind no goroutine that it started.
+//
+// The baseline matters. goleak.VerifyNone inspects every goroutine in the process, not
+// only those belonging to the calling test, so a neighbour's teardown that is still in
+// motion - a socket mid-close, a losing Happy Eyeballs dial unwinding - gets reported
+// against whichever test happens to check at that moment. That is what made
+// TestServeDNS_ThreeServersSelectBestResponse and TestFanoutTCPSuite fail
+// intermittently, and it got easier to hit once the suite stopped spacing tests out
+// with multi-second sleeps.
+//
+// IgnoreCurrent records what is already running at the start of the test, so only
+// goroutines this test is responsible for can fail it. Registering the check here also
+// puts it first in the cleanup order, which - cleanups being LIFO - means it runs last,
+// after every server and client the test registers afterwards has shut down.
+func verifyNoLeaks(tb testing.TB) {
+	tb.Helper()
+	ignore := goleak.IgnoreCurrent()
+	tb.Cleanup(func() { goleak.VerifyNone(tb, ignore) })
+}
+
+// shutdownAfterTest registers f's shutdown with tb, so the upstream clients built
+// during Corefile parsing are closed when the test ends rather than outliving it.
+// This matters most for h3:// upstreams, whose transports otherwise sit around until
+// their grace period expires and show up as leaked goroutines in a later test.
+//
+// A nil f is accepted and ignored, which is what parseFanout returns on a parse error.
+func shutdownAfterTest(tb testing.TB, f *Fanout) {
+	tb.Helper()
+	if f == nil {
+		return
+	}
+	tb.Cleanup(func() { logErrIfNotNil(f.OnShutdown()) })
 }
 
 func makeRecordA(rr string) *dns.A {
@@ -136,6 +180,7 @@ func TestFanout_ExceptFile(t *testing.T) {
 }`, file.Name())
 	c := caddy.NewTestController("dns", source)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 	require.Nil(t, err)
 	for _, e := range exclude {
 		require.True(t, f.ExcludeDomains.Contains(e))
@@ -146,14 +191,13 @@ func TestFanout_ExceptFile(t *testing.T) {
 // Parses a Corefile with "fanout . <addr> { NETWORK <net> }", starts the plugin lifecycle (OnStartup),
 // sends a query, and asserts the correct answer is returned. Runs for both UDP and TCP via the suite.
 func (t *fanoutTestSuite) TestConfigFromCorefile() {
-	defer goleak.VerifyNone(t.T())
-	s := newServer(t.network, func(w dns.ResponseWriter, r *dns.Msg) {
+	verifyNoLeaks(t.T())
+	s := newServer(t.T(), t.network, func(w dns.ResponseWriter, r *dns.Msg) {
 		ret := new(dns.Msg)
 		ret.SetReply(r)
 		ret.Answer = append(ret.Answer, test.A("example.org. IN A 127.0.0.1"))
 		logErrIfNotNil(w.WriteMsg(ret))
 	})
-	defer s.close()
 	source := `fanout . %v {
 	NETWORK %v
 }`
@@ -179,27 +223,20 @@ func (t *fanoutTestSuite) TestConfigFromCorefile() {
 // Sets up 5 servers but WorkerCount=1, so only one server is contacted per query.
 // Asserts exactly one answer is produced and no extra goroutines leak.
 func (t *fanoutTestSuite) TestWorkerCountLessThenServers() {
-	defer goleak.VerifyNone(t.T())
+	verifyNoLeaks(t.T())
 	const expected = 1
 	answerCount := 0
 	var mutex sync.Mutex
-	var closeFuncs []func()
-	free := func() {
-		for _, f := range closeFuncs {
-			f()
-		}
-	}
-	defer free()
 	f := New()
+	shutdownAfterTest(t.T(), f)
 	f.From = "."
 
 	for range 4 {
-		incorrectServer := newServer(t.network, func(_ dns.ResponseWriter, _ *dns.Msg) {
+		incorrectServer := newServer(t.T(), t.network, func(_ dns.ResponseWriter, _ *dns.Msg) {
 		})
 		f.AddClient(NewClient(incorrectServer.addr, t.network))
-		closeFuncs = append(closeFuncs, incorrectServer.close)
 	}
-	correctServer := newServer(t.network, func(w dns.ResponseWriter, r *dns.Msg) {
+	correctServer := newServer(t.T(), t.network, func(w dns.ResponseWriter, r *dns.Msg) {
 		if r.Question[0].Name == testQuery {
 			msg := dns.Msg{
 				Answer: []dns.RR{makeRecordA("example1 3600	IN	A 10.0.0.1")},
@@ -211,7 +248,6 @@ func (t *fanoutTestSuite) TestWorkerCountLessThenServers() {
 			logErrIfNotNil(w.WriteMsg(&msg))
 		}
 	})
-	defer correctServer.close()
 
 	f.AddClient(NewClient(correctServer.addr, t.network))
 	f.WorkerCount = 1
@@ -230,10 +266,10 @@ func (t *fanoutTestSuite) TestWorkerCountLessThenServers() {
 // (cycling through all rcodes) and the other returns success, the plugin always prefers the
 // successful response. Sends 10 queries and asserts every written answer has RcodeSuccess.
 func (t *fanoutTestSuite) TestTwoServersUnsuccessfulResponse() {
-	defer goleak.VerifyNone(t.T())
+	verifyNoLeaks(t.T())
 	rcode := 1
 	rcodeMutex := sync.Mutex{}
-	s1 := newServer(t.network, func(w dns.ResponseWriter, r *dns.Msg) {
+	s1 := newServer(t.T(), t.network, func(w dns.ResponseWriter, r *dns.Msg) {
 		if r.Question[0].Name == testQuery {
 			msg := nxdomainMsg()
 			rcodeMutex.Lock()
@@ -244,7 +280,7 @@ func (t *fanoutTestSuite) TestTwoServersUnsuccessfulResponse() {
 			logErrIfNotNil(w.WriteMsg(msg))
 		}
 	})
-	s2 := newServer(t.network, func(w dns.ResponseWriter, r *dns.Msg) {
+	s2 := newServer(t.T(), t.network, func(w dns.ResponseWriter, r *dns.Msg) {
 		if r.Question[0].Name == testQuery {
 			msg := dns.Msg{
 				Answer: []dns.RR{makeRecordA("example1. 3600	IN	A 10.0.0.1")},
@@ -253,11 +289,10 @@ func (t *fanoutTestSuite) TestTwoServersUnsuccessfulResponse() {
 			logErrIfNotNil(w.WriteMsg(&msg))
 		}
 	})
-	defer s1.close()
-	defer s2.close()
 	c1 := NewClient(s1.addr, t.network)
 	c2 := NewClient(s2.addr, t.network)
 	f := New()
+	shutdownAfterTest(t.T(), f)
 	f.net = t.network
 	f.From = "."
 	f.AddClient(c1)
@@ -278,14 +313,14 @@ func (t *fanoutTestSuite) TestTwoServersUnsuccessfulResponse() {
 // there is no successful answer to prefer, the plugin still forwards the first negative response
 // to the client rather than producing an error.
 func (t *fanoutTestSuite) TestCanReturnUnsuccessfulRepose() {
-	defer goleak.VerifyNone(t.T())
-	s := newServer(t.network, func(w dns.ResponseWriter, r *dns.Msg) {
+	verifyNoLeaks(t.T())
+	s := newServer(t.T(), t.network, func(w dns.ResponseWriter, r *dns.Msg) {
 		msg := nxdomainMsg()
 		msg.SetRcode(r, msg.Rcode)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer s.close()
 	f := New()
+	shutdownAfterTest(t.T(), f)
 	f.net = t.network
 	f.From = "."
 	c := NewClient(s.addr, t.network)
@@ -303,10 +338,10 @@ func (t *fanoutTestSuite) TestCanReturnUnsuccessfulRepose() {
 // A server that drops every other request should eventually answer all queries.
 // Sends 5 queries and asserts that 5 successful answers are received.
 func (t *fanoutTestSuite) TestBusyServer() {
-	defer goleak.VerifyNone(t.T())
+	verifyNoLeaks(t.T())
 	var requestNum, answerCount int32
 	totalRequestNum := int32(5)
-	s := newServer(t.network, func(w dns.ResponseWriter, r *dns.Msg) {
+	s := newServer(t.T(), t.network, func(w dns.ResponseWriter, r *dns.Msg) {
 		serverIsBusy := atomic.LoadInt32(&requestNum)%2 == 0
 		if !serverIsBusy && r.Question[0].Name == testQuery {
 			msg := dns.Msg{
@@ -318,9 +353,9 @@ func (t *fanoutTestSuite) TestBusyServer() {
 		}
 		atomic.AddInt32(&requestNum, 1)
 	})
-	defer s.close()
 	c := NewClient(s.addr, t.network)
 	f := New()
+	shutdownAfterTest(t.T(), f)
 	f.net = t.network
 	f.From = "."
 	f.Attempts = 0
@@ -338,12 +373,12 @@ func (t *fanoutTestSuite) TestBusyServer() {
 // "example1.", server 2 answers "example2.". After both queries, each server has been
 // contacted exactly once, confirming fanout routes to all configured upstreams.
 func (t *fanoutTestSuite) TestTwoServers() {
-	defer goleak.VerifyNone(t.T())
+	verifyNoLeaks(t.T())
 	const expected = 1
 	var mutex sync.Mutex
 	answerCount1 := 0
 	answerCount2 := 0
-	s1 := newServer(t.network, func(w dns.ResponseWriter, r *dns.Msg) {
+	s1 := newServer(t.T(), t.network, func(w dns.ResponseWriter, r *dns.Msg) {
 		if r.Question[0].Name == testQuery {
 			msg := dns.Msg{
 				Answer: []dns.RR{makeRecordA("example1 3600	IN	A 10.0.0.1")},
@@ -355,8 +390,7 @@ func (t *fanoutTestSuite) TestTwoServers() {
 			logErrIfNotNil(w.WriteMsg(&msg))
 		}
 	})
-	defer s1.close()
-	s2 := newServer(t.network, func(w dns.ResponseWriter, r *dns.Msg) {
+	s2 := newServer(t.T(), t.network, func(w dns.ResponseWriter, r *dns.Msg) {
 		if r.Question[0].Name == "example2." {
 			msg := dns.Msg{
 				Answer: []dns.RR{makeRecordA("example2. 3600	IN	A 10.0.0.1")},
@@ -368,11 +402,11 @@ func (t *fanoutTestSuite) TestTwoServers() {
 			logErrIfNotNil(w.WriteMsg(&msg))
 		}
 	})
-	defer s2.close()
 
 	c1 := NewClient(s1.addr, t.network)
 	c2 := NewClient(s2.addr, t.network)
 	f := New()
+	shutdownAfterTest(t.T(), f)
 	f.net = t.network
 	f.From = "."
 	f.AddClient(c1)
@@ -397,7 +431,7 @@ func (t *fanoutTestSuite) TestTwoServers() {
 // With serverCount=1 and a WeightedPolicy, only one of two servers should be contacted.
 // Asserts exactly one answer is produced.
 func (t *fanoutTestSuite) TestServerCount() {
-	defer goleak.VerifyNone(t.T())
+	verifyNoLeaks(t.T())
 	const expected = 1
 	var mutex sync.Mutex
 	answerCount := 0
@@ -414,14 +448,13 @@ func (t *fanoutTestSuite) TestServerCount() {
 			logErrIfNotNil(w.WriteMsg(&msg))
 		}
 	}
-	s1 := newServer(t.network, testFunc)
-	defer s1.close()
-	s2 := newServer(t.network, testFunc)
-	defer s2.close()
+	s1 := newServer(t.T(), t.network, testFunc)
+	s2 := newServer(t.T(), t.network, testFunc)
 
 	c1 := NewClient(s1.addr, t.network)
 	c2 := NewClient(s2.addr, t.network)
 	f := New()
+	shutdownAfterTest(t.T(), f)
 	f.ServerSelectionPolicy = &WeightedPolicy{
 		loadFactor: []int{50, 100},
 	}
