@@ -78,6 +78,7 @@ func TestServeDNS_ConcurrentRequests(t *testing.T) {
 	})
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.AddClient(NewClient(s.addr, TCP))
@@ -115,6 +116,7 @@ func TestServeDNS_MetadataUpstream(t *testing.T) {
 	})
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.AddClient(NewClient(s.addr, TCP))
@@ -141,6 +143,7 @@ func TestServeDNS_MalformedUpstreamResponse(t *testing.T) {
 	})
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.Attempts = 1
@@ -179,6 +182,7 @@ func TestServeDNS_DebugOptionLogsIntermediateUpstreamFailures(t *testing.T) {
 	}()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.Debug = true
 	f.From = "."
 	f.net = TCP
@@ -217,6 +221,7 @@ func TestLogIntermediateFailure_SuppressesCancelledTransportNoise(t *testing.T) 
 	}()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.Debug = true
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -250,6 +255,7 @@ func TestLogIntermediateFailure_DeadlineExceededIncludesContextError(t *testing.
 	}()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.Debug = true
 
 	ctx, cancel := context.WithTimeout(context.Background(), 0)
@@ -291,6 +297,7 @@ func TestLogIntermediateFailure_ShowsConnectFailedClass(t *testing.T) {
 	}()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.Debug = true
 
 	req := new(dns.Msg)
@@ -318,6 +325,7 @@ func TestServeDNS_ErrorIsWrappedForCoreDNSErrorsPlugin(t *testing.T) {
 	})
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.Attempts = 1
@@ -344,6 +352,7 @@ func TestServeDNS_WriteResponseErrorPropagates(t *testing.T) {
 	})
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.AddClient(NewClient(s.addr, TCP))
@@ -372,6 +381,7 @@ func TestServeDNS_WriteFormErrErrorPropagates(t *testing.T) {
 	})
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.AddClient(NewClient(s.addr, TCP))
@@ -408,6 +418,7 @@ func TestServeDNS_InfiniteRetryWithContextTimeout(t *testing.T) {
 	defer close(unblock)
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.Attempts = 0 // infinite retries
@@ -438,6 +449,7 @@ func TestServeDNS_TruncatedResponse(t *testing.T) {
 	})
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.AddClient(NewClient(s.addr, UDP))
 
@@ -472,6 +484,7 @@ func TestServeDNS_ConcurrentStress_ManyServersShortTimeout(t *testing.T) {
 		servers = append(servers, s)
 	}
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.Timeout = 2 * time.Second
@@ -521,6 +534,7 @@ func TestServeDNS_UpstreamWrongIdThenCorrectId(t *testing.T) {
 	})
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.AddClient(NewClient(s.addr, TCP))
@@ -567,6 +581,7 @@ func TestServeDNS_ThreeServersSelectBestResponse(t *testing.T) {
 	f.AddClient(NewClient(s1.addr, TCP))
 	f.AddClient(NewClient(s2.addr, TCP))
 	f.AddClient(NewClient(s3.addr, TCP))
+	shutdownAfterTest(t, f)
 
 	writer := &cachedDNSWriter{ResponseWriter: new(test.ResponseWriter)}
 	for range 5 {
@@ -697,6 +712,7 @@ func TestServeDNS_PartialUpstreamResponse(t *testing.T) {
 	}()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.net = TCP
 	f.Attempts = 1
@@ -726,6 +742,7 @@ func BenchmarkServeDNS_Throughput(b *testing.B) {
 	})
 
 	f := New()
+	shutdownAfterTest(b, f)
 	f.From = "."
 	f.net = TCP
 	f.AddClient(NewClient(s.addr, TCP))

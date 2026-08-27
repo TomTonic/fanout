@@ -657,6 +657,7 @@ func TestDoH3IntegrationWithFanout(t *testing.T) {
 	})
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	doh3c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, doh3c)

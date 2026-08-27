@@ -280,6 +280,7 @@ func TestServeDNSRequestMetricsTrackWins(t *testing.T) {
 	before := snapshotMetrics(t, endpoint, requestErrorProtocol, dns.RcodeToString[dns.RcodeSuccess])
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.Attempts = 1
 	f.WorkerCount = 1
@@ -324,6 +325,7 @@ func TestServeDNSRequestMetricsServfailCountsAsTransportSuccess(t *testing.T) {
 	before := snapshotMetrics(t, endpoint, requestErrorProtocol, dns.RcodeToString[dns.RcodeServerFailure])
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.Attempts = 1
 	f.WorkerCount = 1
@@ -457,6 +459,7 @@ func TestServeDNSQueryMetricsCountHandledQueryAndWin(t *testing.T) {
 	beforeFail := queryFailureValue(t, queryFailureNoResponse)
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.Attempts = 1
 	f.WorkerCount = 1
@@ -487,6 +490,7 @@ func TestServeDNSQueryMetricsNotCountedWhenUnmatched(t *testing.T) {
 	before := queryCounterValue(t)
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "example.org."
 	f.Next = plugin.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
 		msg := new(dns.Msg)
@@ -510,6 +514,7 @@ func TestServeDNSQueryFailureNoResponse(t *testing.T) {
 	beforeFail := queryFailureValue(t, queryFailureNoResponse)
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.Attempts = 1
 	f.WorkerCount = 1
@@ -542,6 +547,7 @@ func TestServeDNSQueryFailureUpstreamError(t *testing.T) {
 	before := queryFailureValue(t, queryFailureUpstreamError)
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.Attempts = 1
 	f.WorkerCount = 1
@@ -569,6 +575,7 @@ func TestServeDNSQueryFailureFormatError(t *testing.T) {
 	before := queryFailureValue(t, queryFailureFormatError)
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	f.Attempts = 1
 	f.WorkerCount = 1

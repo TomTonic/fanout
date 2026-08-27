@@ -654,6 +654,7 @@ func TestDoQIntegrationWithFanout(t *testing.T) {
 	})
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	doqc := newDoQClientWithTLS(srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, doqc)

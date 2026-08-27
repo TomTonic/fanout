@@ -208,6 +208,7 @@ func (t *fanoutTestSuite) TestWorkerCountLessThenServers() {
 	answerCount := 0
 	var mutex sync.Mutex
 	f := New()
+	shutdownAfterTest(t.T(), f)
 	f.From = "."
 
 	for range 4 {
@@ -271,6 +272,7 @@ func (t *fanoutTestSuite) TestTwoServersUnsuccessfulResponse() {
 	c1 := NewClient(s1.addr, t.network)
 	c2 := NewClient(s2.addr, t.network)
 	f := New()
+	shutdownAfterTest(t.T(), f)
 	f.net = t.network
 	f.From = "."
 	f.AddClient(c1)
@@ -298,6 +300,7 @@ func (t *fanoutTestSuite) TestCanReturnUnsuccessfulRepose() {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 	f := New()
+	shutdownAfterTest(t.T(), f)
 	f.net = t.network
 	f.From = "."
 	c := NewClient(s.addr, t.network)
@@ -332,6 +335,7 @@ func (t *fanoutTestSuite) TestBusyServer() {
 	})
 	c := NewClient(s.addr, t.network)
 	f := New()
+	shutdownAfterTest(t.T(), f)
 	f.net = t.network
 	f.From = "."
 	f.Attempts = 0
@@ -382,6 +386,7 @@ func (t *fanoutTestSuite) TestTwoServers() {
 	c1 := NewClient(s1.addr, t.network)
 	c2 := NewClient(s2.addr, t.network)
 	f := New()
+	shutdownAfterTest(t.T(), f)
 	f.net = t.network
 	f.From = "."
 	f.AddClient(c1)
@@ -429,6 +434,7 @@ func (t *fanoutTestSuite) TestServerCount() {
 	c1 := NewClient(s1.addr, t.network)
 	c2 := NewClient(s2.addr, t.network)
 	f := New()
+	shutdownAfterTest(t.T(), f)
 	f.ServerSelectionPolicy = &WeightedPolicy{
 		loadFactor: []int{50, 100},
 	}

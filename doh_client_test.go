@@ -765,6 +765,7 @@ func TestDoHIntegrationWithFanout(t *testing.T) {
 	})
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	dohClient := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 	f.AddClient(dohClient)
