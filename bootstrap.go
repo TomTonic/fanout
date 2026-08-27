@@ -18,11 +18,13 @@ package fanout
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"math/rand/v2"
 	"net"
+	"net/netip"
 
 	"github.com/miekg/dns"
-	"github.com/pkg/errors"
 )
 
 var bootstrapQueryTypes = []uint16{dns.TypeA, dns.TypeAAAA}
@@ -88,13 +90,13 @@ func (b *bootstrapConfig) setECS(subnet *net.IPNet) {
 // included so that authoritative servers return geographically optimal results.
 func (b *bootstrapConfig) lookup(ctx context.Context, host string) ([]string, error) {
 	var (
-		allIPs  []string
-		lastErr error
+		allIPs []string
+		errs   []error
 	)
 	for _, qtype := range bootstrapQueryTypes {
 		ips, err := b.queryBootstrap(ctx, host, qtype)
 		if err != nil {
-			lastErr = err
+			errs = append(errs, err)
 			continue
 		}
 		if len(ips) > 0 {
@@ -104,10 +106,13 @@ func (b *bootstrapConfig) lookup(ctx context.Context, host string) ([]string, er
 	if len(allIPs) > 0 {
 		return allIPs, nil
 	}
-	if lastErr != nil {
-		return nil, errors.Wrapf(lastErr, "bootstrap: no addresses found for %s", host)
+	// Report every query type that failed, not just the last one: an A failure and
+	// an AAAA failure usually have different causes and both matter when bootstrap
+	// resolution is what broke.
+	if err := errors.Join(errs...); err != nil {
+		return nil, fmt.Errorf("bootstrap: no addresses found for %s: %w", host, err)
 	}
-	return nil, errors.Errorf("bootstrap: no addresses found for %s", host)
+	return nil, fmt.Errorf("bootstrap: no addresses found for %s", host)
 }
 
 // queryBootstrap sends a DNS query to the configured bootstrap resolvers in
@@ -133,15 +138,15 @@ func (b *bootstrapConfig) queryBootstrap(ctx context.Context, host string, qtype
 		Timeout: dialTimeout,
 	}
 
-	var lastErr error
+	var errs []error
 	for _, addr := range b.shuffledAddrs() {
 		resp, _, err := client.ExchangeContext(ctx, msg, addr)
 		if err != nil {
-			lastErr = errors.Wrapf(err, "bootstrap query to %s failed", addr)
+			errs = append(errs, fmt.Errorf("bootstrap query to %s failed: %w", addr, err))
 			continue
 		}
 		if resp.Rcode != dns.RcodeSuccess {
-			lastErr = errors.Errorf("bootstrap query to %s for %s (type %d) returned rcode %d", addr, host, qtype, resp.Rcode)
+			errs = append(errs, fmt.Errorf("bootstrap query to %s for %s (type %d) returned rcode %d", addr, host, qtype, resp.Rcode))
 			continue
 		}
 
@@ -157,10 +162,12 @@ func (b *bootstrapConfig) queryBootstrap(ctx context.Context, host string, qtype
 		return ips, nil
 	}
 
-	if lastErr != nil {
-		return nil, lastErr
+	// Every resolver that was tried contributes its reason, so a partial outage is
+	// distinguishable from every resolver rejecting the query.
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
 	}
-	return nil, errors.Errorf("bootstrap query for %s (type %d) returned no usable resolvers", host, qtype)
+	return nil, fmt.Errorf("bootstrap query for %s (type %d) returned no usable resolvers", host, qtype)
 }
 
 func (b *bootstrapConfig) shuffledAddrs() []string {
@@ -190,7 +197,7 @@ func (b *bootstrapConfig) resolveHostCandidates(ctx context.Context, hostport st
 	}
 	ips, err := b.lookup(ctx, host)
 	if err != nil {
-		return nil, host, errors.Wrapf(err, "bootstrap resolution of %s failed", host)
+		return nil, host, fmt.Errorf("bootstrap resolution of %s failed: %w", host, err)
 	}
 	resolved = make([]string, 0, len(ips))
 	for _, ip := range ips {
@@ -207,7 +214,7 @@ func (b *bootstrapConfig) resolveHost(ctx context.Context, hostport string) (res
 		return "", hostname, err
 	}
 	if len(resolvedAddrs) == 0 {
-		return "", hostname, errors.Errorf("bootstrap: no addresses found for %s", hostport)
+		return "", hostname, fmt.Errorf("bootstrap: no addresses found for %s", hostport)
 	}
 	return resolvedAddrs[0], hostname, nil
 }
@@ -223,18 +230,20 @@ func (b *bootstrapConfig) dialContext() func(ctx context.Context, network, addre
 			return nil, err
 		}
 		d := net.Dialer{Timeout: dialTimeout}
-		var lastErr error
+		var errs []error
 		for _, resolved := range resolvedAddrs {
 			conn, err := d.DialContext(ctx, network, resolved)
 			if err == nil {
 				return conn, nil
 			}
-			lastErr = err
+			errs = append(errs, err)
 		}
-		if lastErr != nil {
-			return nil, errors.Wrapf(lastErr, "bootstrap dial to %s failed", address)
+		// Keep one entry per resolved address; "connection refused on v4, no route
+		// on v6" is a materially different diagnosis than either alone.
+		if err := errors.Join(errs...); err != nil {
+			return nil, fmt.Errorf("bootstrap dial to %s failed: %w", address, err)
 		}
-		return nil, errors.Errorf("bootstrap dial to %s failed: no addresses resolved", address)
+		return nil, fmt.Errorf("bootstrap dial to %s failed: no addresses resolved", address)
 	}
 }
 
@@ -242,15 +251,15 @@ func detectLocalSubnetFromAny(targetAddrs []string) (*net.IPNet, error) {
 	if len(targetAddrs) == 0 {
 		return nil, errors.New("no bootstrap resolvers configured")
 	}
-	var lastErr error
+	var errs []error
 	for _, addr := range targetAddrs {
 		subnet, err := detectLocalSubnet(addr)
 		if err == nil {
 			return subnet, nil
 		}
-		lastErr = errors.Wrapf(err, "detecting local subnet via %s", addr)
+		errs = append(errs, fmt.Errorf("detecting local subnet via %s: %w", addr, err))
 	}
-	return nil, lastErr
+	return nil, errors.Join(errs...)
 }
 
 // detectLocalSubnet determines the machine's outgoing IP address by making
@@ -260,21 +269,34 @@ func detectLocalSubnetFromAny(targetAddrs []string) (*net.IPNet, error) {
 func detectLocalSubnet(targetAddr string) (*net.IPNet, error) {
 	conn, err := net.DialTimeout("udp", targetAddr, dialTimeout)
 	if err != nil {
-		return nil, errors.Wrap(err, "detecting local subnet")
+		return nil, fmt.Errorf("detecting local subnet: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
 
 	host, _, err := net.SplitHostPort(conn.LocalAddr().String())
 	if err != nil {
-		return nil, errors.Wrap(err, "parsing local address")
+		return nil, fmt.Errorf("parsing local address: %w", err)
 	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return nil, errors.Errorf("invalid local IP %q", host)
+	// netip.Addr answers "is this v4?" unambiguously via Is4, where net.IP requires the
+	// To4()-returns-nil dance, and Addr.Prefix truncates to the prefix length without
+	// hand-built CIDRMask values. The result is converted back because the caller feeds
+	// it to dns.EDNS0_SUBNET, whose Address field is a net.IP.
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return nil, fmt.Errorf("invalid local IP %q", host)
 	}
+	addr = addr.Unmap() // a v4-mapped v6 address is a v4 subnet for ECS purposes
 
-	if v4 := ip.To4(); v4 != nil {
-		return &net.IPNet{IP: v4.Mask(net.CIDRMask(24, 32)), Mask: net.CIDRMask(24, 32)}, nil
+	bits := 48
+	if addr.Is4() {
+		bits = 24
 	}
-	return &net.IPNet{IP: ip.Mask(net.CIDRMask(48, 128)), Mask: net.CIDRMask(48, 128)}, nil
+	prefix, err := addr.Prefix(bits)
+	if err != nil {
+		return nil, fmt.Errorf("masking local IP %q to /%d: %w", host, bits, err)
+	}
+	return &net.IPNet{
+		IP:   net.IP(prefix.Addr().AsSlice()),
+		Mask: net.CIDRMask(bits, addr.BitLen()),
+	}, nil
 }

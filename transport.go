@@ -18,6 +18,7 @@
 package fanout
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"net"
@@ -149,10 +150,7 @@ func (t *transportImpl) dial(ctx context.Context, c *dns.Client) (*dns.Conn, err
 	} else {
 		d = *c.Dialer
 	}
-	network := c.Net
-	if network == "" {
-		network = UDP
-	}
+	network := cmp.Or(c.Net, UDP)
 	var conn = new(dns.Conn)
 	var err error
 	if network == TCPTLS {

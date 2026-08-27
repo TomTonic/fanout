@@ -94,6 +94,10 @@ func newDoHTestServer(t *testing.T, handler dns.HandlerFunc) (*httptest.Server, 
 	})
 
 	srv := httptest.NewTLSServer(mux)
+	// Shut the server down through t.Cleanup rather than making every caller
+	// remember a defer. Cleanups run after the test's own defers, so a caller that
+	// releases a blocked handler by defer still does so before the server closes.
+	t.Cleanup(srv.Close)
 
 	// Build a client TLS config that trusts the test server's certificate.
 	certPool := x509.NewCertPool()
@@ -171,7 +175,6 @@ func TestDoHClientBasicRequest(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 
@@ -198,7 +201,6 @@ func TestDoHClientNXDOMAIN(t *testing.T) { //nolint:dupl // test for NXDOMAIN re
 		msg.SetRcode(r, dns.RcodeNameError)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 
@@ -227,7 +229,6 @@ func TestDoHClientMultipleRecords(t *testing.T) { //nolint:dupl // test for mult
 		)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 
@@ -289,11 +290,20 @@ func TestDoHClientBadContentType(t *testing.T) { //nolint:dupl // test for bad c
 // TestDoHClientContextCancellation verifies that the DoH client immediately returns
 // an error when the request context is cancelled before the server responds.
 func TestDoHClientContextCancellation(t *testing.T) {
-	// Server that sleeps longer than the context deadline to force cancellation.
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
-		time.Sleep(30 * time.Second)
+	// Server that never responds, so the client's context deadline is what ends the
+	// request. httptest.Server.Close waits for outstanding handlers, so a fixed sleep
+	// here would be charged to the test. The request context alone is not a reliable
+	// release signal (the server does not always observe the client abort), so unblock
+	// is the deterministic backstop.
+	unblock := make(chan struct{})
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-unblock:
+		}
 	}))
-	defer srv.Close()
+	defer srv.Close()    // runs last
+	defer close(unblock) // runs first, so the handler is gone before Close
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", testServerClientTLS(srv))
 
@@ -370,7 +380,6 @@ func TestDoHClientSetTLSConfigConcurrent(t *testing.T) {
 		msg.SetReply(r)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -429,7 +438,6 @@ func TestDoHClientConcurrentRequests(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 
@@ -471,7 +479,6 @@ func TestDoHClientAAAARecord(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 
@@ -499,7 +506,6 @@ func TestDoHClientEmptyResponse(t *testing.T) {
 		// No answer records (NODATA).
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 
@@ -644,6 +650,7 @@ func TestSetupDoHConfig(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := caddy.NewTestController("dns", tc.input)
 			f, err := parseFanout(c)
+			shutdownAfterTest(t, f)
 
 			if tc.expectedErr != "" {
 				require.Error(t, err)
@@ -670,6 +677,7 @@ func TestSetupDoHWithOptions(t *testing.T) {
 	}`
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.Len(t, f.clients, 2)
@@ -686,6 +694,7 @@ func TestSetupDoHNetworkProtocol(t *testing.T) {
 	}`
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.Equal(t, DOH, f.net)
@@ -703,7 +712,6 @@ func TestDoHClientIDPreservation(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 
@@ -727,7 +735,6 @@ func TestDoHClientSERVFAIL(t *testing.T) { //nolint:dupl // test for SERVFAIL re
 		msg.SetRcode(r, dns.RcodeServerFailure)
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 
@@ -756,9 +763,9 @@ func TestDoHIntegrationWithFanout(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	f := New()
+	shutdownAfterTest(t, f)
 	f.From = "."
 	dohClient := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 	f.AddClient(dohClient)
@@ -804,7 +811,6 @@ func TestDoHClientTXTRecord(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 
@@ -829,6 +835,7 @@ func TestSetupMixedDoHAndPlainParsing(t *testing.T) {
 	input := "fanout . 127.0.0.1 https://dns.google/dns-query 127.0.0.2"
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.Len(t, f.clients, 3)
@@ -850,6 +857,7 @@ func TestSetupDoHOnlyNoPlain(t *testing.T) {
 	input := corefileDoHGoogle
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.Len(t, f.clients, 1)
@@ -863,6 +871,7 @@ func TestSetupDoHWithExcept(t *testing.T) {
 	}`
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.True(t, f.ExcludeDomains.Contains("internal.example.com."))
@@ -914,7 +923,6 @@ func TestDoHClientPreservesFlags(t *testing.T) {
 		})
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
-	defer srv.Close()
 
 	c := newDoHClientWithTLS(srv.URL+"/dns-query", clientTLS)
 
@@ -939,6 +947,7 @@ func TestSetupDoHConfigWithRace(t *testing.T) {
 	}`
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.True(t, f.Race)
@@ -959,6 +968,7 @@ func TestSetupDoHConfigCaseInsensitive(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := caddy.NewTestController("dns", tc.input)
 			f, err := parseFanout(c)
+			shutdownAfterTest(t, f)
 			require.NoError(t, err)
 			require.Len(t, f.clients, 1)
 			require.Equal(t, DOH, f.clients[0].Net())
@@ -984,6 +994,7 @@ func TestDoHParseDoesNotBreakExistingSetup(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := caddy.NewTestController("dns", tc.input)
 			f, err := parseFanout(c)
+			shutdownAfterTest(t, f)
 			require.NoError(t, err)
 			require.Len(t, f.clients, tc.expectedN)
 			require.Equal(t, tc.expectedNet, f.net)
@@ -1010,6 +1021,7 @@ func TestSetupDoHMixed(t *testing.T) {
 	input := "fanout . tls://1.1.1.1 https://dns.google/dns-query {\ntls-server cloudflare\n}"
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.Len(t, f.clients, 2)

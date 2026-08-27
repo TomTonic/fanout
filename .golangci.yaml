@@ -48,8 +48,12 @@ linters:
       rules:
         default:
           deny:
-            - pkg: "errors"
-              desc: "Please use \"github.com/pkg/errors\" instead of \"errors\" in go imports"
+            # Inherited from the upstream project, which predates Go 1.13. The standard
+            # library covers everything this code used pkg/errors for: %w wrapping since
+            # 1.13, Is/As since 1.13, Join since 1.20, AsType since 1.26. Denying it here
+            # keeps the old usage from creeping back while the migration is in progress.
+            - pkg: "github.com/pkg/errors"
+              desc: 'Use the standard library "errors" and fmt.Errorf with %w instead'
     nakedret:
       max-func-lines: 30
     gocritic:
@@ -114,7 +118,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/networkservicemesh/sdk
+        - github.com/TomTonic/fanout
 
 issues:
   max-issues-per-linter: 0

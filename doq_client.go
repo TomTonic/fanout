@@ -20,6 +20,8 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"io"
 	"math"
 	"sync"
@@ -27,7 +29,6 @@ import (
 
 	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
-	"github.com/pkg/errors"
 	"github.com/quic-go/quic-go"
 )
 
@@ -133,7 +134,7 @@ func (c *doqClient) Request(ctx context.Context, r *request.Request) (*dns.Msg, 
 			return nil, observeSuppressedRequestFailure(ctx, c.addr, err)
 		}
 		observeRequestError(c.addr, requestErrorConnect)
-		return nil, withRequestErrorClass(errors.Wrap(err, "failed to establish QUIC connection"), requestErrorConnect)
+		return nil, withRequestErrorClass(fmt.Errorf("failed to establish QUIC connection: %w", err), requestErrorConnect)
 	}
 
 	// RFC 9250 §4.2: Each DNS query-response pair uses a single QUIC stream.
@@ -147,7 +148,7 @@ func (c *doqClient) Request(ctx context.Context, r *request.Request) (*dns.Msg, 
 				return nil, observeSuppressedRequestFailure(ctx, c.addr, err)
 			}
 			observeRequestError(c.addr, requestErrorReconnect)
-			return nil, withRequestErrorClass(errors.Wrap(err, "failed to re-establish QUIC connection"), requestErrorReconnect)
+			return nil, withRequestErrorClass(fmt.Errorf("failed to re-establish QUIC connection: %w", err), requestErrorReconnect)
 		}
 		stream, err = conn.OpenStreamSync(ctx)
 		if err != nil {
@@ -155,7 +156,7 @@ func (c *doqClient) Request(ctx context.Context, r *request.Request) (*dns.Msg, 
 				return nil, observeSuppressedRequestFailure(ctx, c.addr, err)
 			}
 			observeRequestError(c.addr, requestErrorStreamOpen)
-			return nil, withRequestErrorClass(errors.Wrap(err, "failed to open QUIC stream"), requestErrorStreamOpen)
+			return nil, withRequestErrorClass(fmt.Errorf("failed to open QUIC stream: %w", err), requestErrorStreamOpen)
 		}
 	}
 
@@ -191,17 +192,17 @@ func (c *doqClient) writeQuery(ctx context.Context, stream *quic.Stream, req *dn
 	// Set write deadline from context or fallback.
 	writeDeadline := deadlineFromCtx(ctx, dialTimeout)
 	if err := stream.SetWriteDeadline(writeDeadline); err != nil {
-		return withRequestErrorClass(errors.Wrap(err, "DoQ: failed to set write deadline"), requestErrorRequestSend)
+		return withRequestErrorClass(fmt.Errorf("DoQ: failed to set write deadline: %w", err), requestErrorRequestSend)
 	}
 
 	// RFC 9250 §4.2: DNS messages are prefixed with a 2-byte length field.
 	packed, err := req.Pack()
 	if err != nil {
-		return withRequestErrorClass(errors.Wrap(err, "DoQ: failed to pack DNS request"), requestErrorRequestEncode)
+		return withRequestErrorClass(fmt.Errorf("DoQ: failed to pack DNS request: %w", err), requestErrorRequestEncode)
 	}
 
 	if len(packed) > math.MaxUint16 {
-		return withRequestErrorClass(errors.Errorf("DoQ: packed DNS message too large (%d bytes)", len(packed)), requestErrorRequestEncode)
+		return withRequestErrorClass(fmt.Errorf("DoQ: packed DNS message too large (%d bytes)", len(packed)), requestErrorRequestEncode)
 	}
 
 	// Write length prefix + message in one write for efficiency.
@@ -210,12 +211,12 @@ func (c *doqClient) writeQuery(ctx context.Context, stream *quic.Stream, req *dn
 	copy(buf[2:], packed)
 
 	if _, err = stream.Write(buf); err != nil {
-		return withRequestErrorClass(errors.Wrap(err, "DoQ: failed to write DNS query to stream"), requestErrorRequestSend)
+		return withRequestErrorClass(fmt.Errorf("DoQ: failed to write DNS query to stream: %w", err), requestErrorRequestSend)
 	}
 
 	// RFC 9250 §4.2: The client MUST send a FIN after sending a query.
 	if err = stream.Close(); err != nil {
-		return withRequestErrorClass(errors.Wrap(err, "DoQ: failed to close write half of stream"), requestErrorRequestSend)
+		return withRequestErrorClass(fmt.Errorf("DoQ: failed to close write half of stream: %w", err), requestErrorRequestSend)
 	}
 
 	return nil
@@ -226,28 +227,28 @@ func (c *doqClient) readResponse(ctx context.Context, stream *quic.Stream, origI
 	// Set read deadline.
 	readDeadline := deadlineFromCtx(ctx, readTimeout)
 	if err := stream.SetReadDeadline(readDeadline); err != nil {
-		return nil, withRequestErrorClass(errors.Wrap(err, "DoQ: failed to set read deadline"), requestErrorResponseRead)
+		return nil, withRequestErrorClass(fmt.Errorf("DoQ: failed to set read deadline: %w", err), requestErrorResponseRead)
 	}
 
 	// Read the 2-byte length prefix.
 	var lenBuf [2]byte
 	if _, err := io.ReadFull(stream, lenBuf[:]); err != nil {
-		return nil, withRequestErrorClass(errors.Wrap(err, "DoQ: failed to read response length prefix"), requestErrorResponseRead)
+		return nil, withRequestErrorClass(fmt.Errorf("DoQ: failed to read response length prefix: %w", err), requestErrorResponseRead)
 	}
 	respLen := binary.BigEndian.Uint16(lenBuf[:])
 	if respLen == 0 {
-		return nil, withRequestErrorClass(errors.Errorf("DoQ: invalid response length %d", respLen), requestErrorProtocol)
+		return nil, withRequestErrorClass(fmt.Errorf("DoQ: invalid response length %d", respLen), requestErrorProtocol)
 	}
 
 	// Read the DNS response message.
 	respBuf := make([]byte, respLen)
 	if _, err := io.ReadFull(stream, respBuf); err != nil {
-		return nil, withRequestErrorClass(errors.Wrap(err, "DoQ: failed to read DNS response"), requestErrorResponseRead)
+		return nil, withRequestErrorClass(fmt.Errorf("DoQ: failed to read DNS response: %w", err), requestErrorResponseRead)
 	}
 
 	ret := new(dns.Msg)
 	if err := ret.Unpack(respBuf); err != nil {
-		return nil, withRequestErrorClass(errors.Wrap(err, "DoQ: failed to unpack DNS response"), requestErrorResponseDecode)
+		return nil, withRequestErrorClass(fmt.Errorf("DoQ: failed to unpack DNS response: %w", err), requestErrorResponseDecode)
 	}
 
 	// RFC 9250 §4.2: The ID MUST be set to 0 in DoQ (set to 0 by server).
@@ -294,7 +295,7 @@ func (c *doqClient) getOrDialConn(ctx context.Context) (*quic.Conn, error) {
 		if hostname != "" && tlsCfg.ServerName == "" {
 			tlsCfg.ServerName = hostname
 		}
-		var lastErr error
+		var errs []error
 		for _, resolved := range resolvedAddrs {
 			conn, err := quic.DialAddr(ctx, resolved, tlsCfg, &quic.Config{
 				MaxIdleTimeout:  30 * time.Second,
@@ -304,12 +305,12 @@ func (c *doqClient) getOrDialConn(ctx context.Context) (*quic.Conn, error) {
 				c.conn = conn
 				return conn, nil
 			}
-			lastErr = err
+			errs = append(errs, err)
 		}
-		if lastErr != nil {
-			return nil, errors.Wrapf(lastErr, "bootstrap QUIC dial to %s failed", c.addr)
+		if err := errors.Join(errs...); err != nil {
+			return nil, fmt.Errorf("bootstrap QUIC dial to %s failed: %w", c.addr, err)
 		}
-		return nil, errors.Errorf("bootstrap QUIC dial to %s failed: no addresses resolved", c.addr)
+		return nil, fmt.Errorf("bootstrap QUIC dial to %s failed: no addresses resolved", c.addr)
 	}
 
 	conn, err := quic.DialAddr(ctx, dialAddr, tlsCfg, &quic.Config{
