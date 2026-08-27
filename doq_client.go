@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -294,7 +295,7 @@ func (c *doqClient) getOrDialConn(ctx context.Context) (*quic.Conn, error) {
 		if hostname != "" && tlsCfg.ServerName == "" {
 			tlsCfg.ServerName = hostname
 		}
-		var lastErr error
+		var errs []error
 		for _, resolved := range resolvedAddrs {
 			conn, err := quic.DialAddr(ctx, resolved, tlsCfg, &quic.Config{
 				MaxIdleTimeout:  30 * time.Second,
@@ -304,10 +305,10 @@ func (c *doqClient) getOrDialConn(ctx context.Context) (*quic.Conn, error) {
 				c.conn = conn
 				return conn, nil
 			}
-			lastErr = err
+			errs = append(errs, err)
 		}
-		if lastErr != nil {
-			return nil, fmt.Errorf("bootstrap QUIC dial to %s failed: %w", c.addr, lastErr)
+		if err := errors.Join(errs...); err != nil {
+			return nil, fmt.Errorf("bootstrap QUIC dial to %s failed: %w", c.addr, err)
 		}
 		return nil, fmt.Errorf("bootstrap QUIC dial to %s failed: no addresses resolved", c.addr)
 	}
