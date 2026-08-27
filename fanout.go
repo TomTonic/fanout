@@ -19,6 +19,7 @@
 package fanout
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -152,10 +153,7 @@ func (f *Fanout) ServeDNS(ctx context.Context, w dns.ResponseWriter, m *dns.Msg)
 // startup logging, so operators can confirm what fanout actually loaded without
 // re-reading the Corefile.
 func (f *Fanout) configSummary() string {
-	policyName := f.policyType
-	if policyName == "" {
-		policyName = policySequential
-	}
+	policyName := cmp.Or(f.policyType, policySequential)
 	attempts := fmt.Sprintf("%d", f.Attempts)
 	if f.Attempts == 0 {
 		attempts = "inf"
@@ -172,7 +170,7 @@ func (f *Fanout) runWorkers(ctx context.Context, req *request.Request) chan *res
 	responseCh := make(chan *response, f.serverCount)
 	go func() {
 		defer close(workerCh)
-		for i := 0; i < f.serverCount; i++ {
+		for range f.serverCount {
 			// Evaluate Pick() into a variable first. A send case in a select
 			// (workerCh <- sel.Pick()) evaluates its right-hand side even when
 			// the ctx.Done() case wins, which would silently consume and discard
@@ -194,11 +192,9 @@ func (f *Fanout) runWorkers(ctx context.Context, req *request.Request) chan *res
 
 	go func() {
 		var wg sync.WaitGroup
-		wg.Add(f.WorkerCount)
 
-		for i := 0; i < f.WorkerCount; i++ {
-			go func() {
-				defer wg.Done()
+		for range f.WorkerCount {
+			wg.Go(func() {
 				for c := range workerCh {
 					select {
 					case <-ctx.Done():
@@ -211,7 +207,7 @@ func (f *Fanout) runWorkers(ctx context.Context, req *request.Request) chan *res
 					case responseCh <- f.processClient(ctx, c, &request.Request{W: req.W, Req: req.Req}):
 					}
 				}
-			}()
+			})
 		}
 
 		wg.Wait()
