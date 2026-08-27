@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/coredns/caddy"
@@ -137,35 +138,62 @@ func TestServeDNS_NilClientPickDoesNotPanic(t *testing.T) {
 // TestServeDNS_CancelsLosingUpstreamsPromptly verifies that once a winner is
 // selected, the still-running losing upstream is cancelled immediately rather
 // than lingering until the (here deliberately long) timeout elapses.
+//
+// This runs inside a synctest bubble because the property is about ordering, not
+// duration. It previously raced a real two-second timer against the cancellation and
+// failed under machine load; synctest.Wait blocks until every goroutine in the bubble
+// is durably blocked, so "was the loser cancelled" becomes a settled question rather
+// than a deadline to beat. Only stub clients are involved, so nothing in the bubble
+// touches the network. goleak is not needed here: synctest.Test already waits for all
+// bubble goroutines to exit and fails the test if they deadlock.
 func TestServeDNS_CancelsLosingUpstreamsPromptly(t *testing.T) {
-	defer goleak.VerifyNone(t)
-	f := New()
-	f.From = "."
-	f.Attempts = 1
-	f.Timeout = 30 * time.Second // the loser would block far past the test budget if not cancelled
+	synctest.Test(t, func(t *testing.T) {
+		f := New()
+		f.From = "."
+		f.Attempts = 1
+		f.Timeout = 30 * time.Second // the loser would block far past the test budget if not cancelled
 
-	loserCancelled := make(chan struct{})
-	f.AddClient(metricsClientStub{endpoint: "winner.invalid:53", network: UDP, request: func(_ context.Context, r *request.Request) (*dns.Msg, error) {
-		resp := new(dns.Msg)
-		resp.SetReply(r.Req)
-		return resp, nil
-	}})
-	f.AddClient(metricsClientStub{endpoint: "loser.invalid:53", network: UDP, request: func(ctx context.Context, _ *request.Request) (*dns.Msg, error) {
-		<-ctx.Done()
-		close(loserCancelled)
-		return nil, ctx.Err()
-	}})
+		var loserStarted atomic.Bool
+		loserCancelled := make(chan struct{})
+		f.AddClient(metricsClientStub{endpoint: "winner.invalid:53", network: UDP, request: func(_ context.Context, r *request.Request) (*dns.Msg, error) {
+			resp := new(dns.Msg)
+			resp.SetReply(r.Req)
+			return resp, nil
+		}})
+		f.AddClient(metricsClientStub{endpoint: "loser.invalid:53", network: UDP, request: func(ctx context.Context, _ *request.Request) (*dns.Msg, error) {
+			loserStarted.Store(true)
+			<-ctx.Done()
+			close(loserCancelled)
+			return nil, ctx.Err()
+		}})
 
-	req := new(dns.Msg)
-	req.SetQuestion("example.org.", dns.TypeA)
-	_, err := f.ServeDNS(context.Background(), &test.ResponseWriter{}, req)
-	require.NoError(t, err)
+		req := new(dns.Msg)
+		req.SetQuestion("example.org.", dns.TypeA)
+		start := time.Now()
+		_, err := f.ServeDNS(context.Background(), &test.ResponseWriter{}, req)
+		require.NoError(t, err)
+		elapsed := time.Since(start)
 
-	select {
-	case <-loserCancelled:
-	case <-time.After(2 * time.Second):
-		t.Fatal("losing upstream was not cancelled promptly after a winner was selected")
-	}
+		// Let every remaining bubble goroutine run to its blocking point.
+		synctest.Wait()
+
+		// The property under test: answering does not wait on the loser. On the bubble's
+		// clock the winner's answer costs nothing, so any delay here would be the 30s
+		// timeout being served out.
+		require.Zero(t, elapsed, "ServeDNS must return on the winner, not wait out the timeout")
+
+		// Whether the loser ever reaches its Request call is a scheduling detail:
+		// processClient checks ctx.Err() before dialing, so a loser cancelled early
+		// enough is skipped entirely. Both outcomes satisfy "not left running" - but if
+		// it did start, it must have been unblocked rather than stranded.
+		if loserStarted.Load() {
+			select {
+			case <-loserCancelled:
+			default:
+				t.Fatal("the losing upstream started but was never cancelled")
+			}
+		}
+	})
 }
 
 // ---------- 2. ServeDNS: Race mode, Domain mismatch, FormatError ----------
