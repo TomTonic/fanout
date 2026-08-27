@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -28,7 +29,6 @@ import (
 
 	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
-	"github.com/pkg/errors"
 )
 
 // dohMaxResponseSize is the maximum DNS response body we will read over DoH (64 KiB).
@@ -172,13 +172,13 @@ func dohRoundTrip(ctx context.Context, httpClient *http.Client, endpoint string,
 	msg, err := r.Req.Pack()
 	if err != nil {
 		observeRequestError(endpoint, requestErrorRequestEncode)
-		return nil, withRequestErrorClass(errors.Wrap(err, "failed to pack DNS request for DoH"), requestErrorRequestEncode)
+		return nil, withRequestErrorClass(fmt.Errorf("failed to pack DNS request for DoH: %w", err), requestErrorRequestEncode)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(msg))
 	if err != nil {
 		observeRequestError(endpoint, requestErrorRequestBuild)
-		return nil, withRequestErrorClass(errors.Wrap(err, "failed to create DoH HTTP request"), requestErrorRequestBuild)
+		return nil, withRequestErrorClass(fmt.Errorf("failed to create DoH HTTP request: %w", err), requestErrorRequestBuild)
 	}
 	httpReq.Header.Set("Content-Type", dohContentType)
 	httpReq.Header.Set("Accept", dohContentType)
@@ -199,7 +199,7 @@ func dohRoundTrip(ctx context.Context, httpClient *http.Client, endpoint string,
 func dohDo(httpClient *http.Client, httpReq *http.Request) (*dns.Msg, error) {
 	resp, err := httpClient.Do(httpReq) //nolint:gosec // G704: URL comes from plugin configuration, not user input
 	if err != nil {
-		return nil, withRequestErrorClass(errors.Wrap(err, "DoH HTTP request failed"), requestErrorRequestSend)
+		return nil, withRequestErrorClass(fmt.Errorf("DoH HTTP request failed: %w", err), requestErrorRequestSend)
 	}
 	defer func() {
 		// Drain any remaining body bytes so the connection can be reused.
@@ -208,21 +208,21 @@ func dohDo(httpClient *http.Client, httpReq *http.Request) (*dns.Msg, error) {
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, withRequestErrorClass(errors.Errorf("DoH server returned HTTP %d", resp.StatusCode), requestErrorResponseStatus)
+		return nil, withRequestErrorClass(fmt.Errorf("DoH server returned HTTP %d", resp.StatusCode), requestErrorResponseStatus)
 	}
 
 	if ct := resp.Header.Get("Content-Type"); ct != dohContentType {
-		return nil, withRequestErrorClass(errors.Errorf("DoH server returned unexpected content-type %q", ct), requestErrorResponseContentType)
+		return nil, withRequestErrorClass(fmt.Errorf("DoH server returned unexpected content-type %q", ct), requestErrorResponseContentType)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, dohMaxResponseSize))
 	if err != nil {
-		return nil, withRequestErrorClass(errors.Wrap(err, "failed to read DoH response body"), requestErrorResponseRead)
+		return nil, withRequestErrorClass(fmt.Errorf("failed to read DoH response body: %w", err), requestErrorResponseRead)
 	}
 
 	ret := new(dns.Msg)
 	if err = ret.Unpack(body); err != nil {
-		return nil, withRequestErrorClass(errors.Wrap(err, "failed to unpack DoH DNS response"), requestErrorResponseDecode)
+		return nil, withRequestErrorClass(fmt.Errorf("failed to unpack DoH DNS response: %w", err), requestErrorResponseDecode)
 	}
 
 	return ret, nil

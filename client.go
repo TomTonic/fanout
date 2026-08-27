@@ -20,6 +20,7 @@ package fanout
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"math"
 	"net"
 	"sync"
@@ -30,7 +31,6 @@ import (
 	"github.com/miekg/dns"
 	ot "github.com/opentracing/opentracing-go"
 	otext "github.com/opentracing/opentracing-go/ext"
-	"github.com/pkg/errors"
 )
 
 var errMaxReadLoopExceeded = errors.New("maximum read loop iterations exceeded without matching response ID")

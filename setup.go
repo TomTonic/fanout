@@ -19,6 +19,8 @@
 package fanout
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -36,7 +38,6 @@ import (
 	"github.com/coredns/coredns/plugin/pkg/parse"
 	"github.com/coredns/coredns/plugin/pkg/tls"
 	"github.com/coredns/coredns/plugin/pkg/transport"
-	"github.com/pkg/errors"
 )
 
 const (
@@ -106,7 +107,7 @@ func setup(c *caddy.Controller) error {
 	}
 	l := len(f.clients)
 	if l > maxIPCount {
-		return plugin.Error(pluginName, errors.Errorf("more than %d TOs configured: %d", maxIPCount, l))
+		return plugin.Error(pluginName, fmt.Errorf("more than %d TOs configured: %d", maxIPCount, l))
 	}
 
 	dnsserver.GetConfig(c).AddPlugin(func(next plugin.Handler) plugin.Handler {
@@ -172,7 +173,7 @@ func parseFanoutStanza(c *caddyfile.Dispenser) (*Fanout, error) {
 
 	normalized := plugin.Host(f.From).NormalizeExact()
 	if len(normalized) == 0 {
-		return nil, errors.Errorf("unable to normalize '%s'", f.From)
+		return nil, fmt.Errorf("unable to normalize '%s'", f.From)
 	}
 	f.From = normalized[0]
 
@@ -343,7 +344,7 @@ var parseRegistry = map[string]func(*Fanout, *caddyfile.Dispenser) error{
 func parseValue(v string, f *Fanout, c *caddyfile.Dispenser) error {
 	handler, ok := parseRegistry[v]
 	if !ok {
-		return errors.Errorf("unknown property %v", v)
+		return fmt.Errorf("unknown property %v", v)
 	}
 	return handler(f, c)
 }
@@ -375,7 +376,7 @@ func parsePolicy(f *Fanout, c *caddyfile.Dispenser) error {
 
 	policyType := strings.ToLower(c.Val())
 	if policyType != policyWeightedRandom && policyType != policySequential {
-		return errors.Errorf("unknown policy %q", c.Val())
+		return fmt.Errorf("unknown policy %q", c.Val())
 	}
 	f.policyType = policyType
 
@@ -393,10 +394,10 @@ func parseTimeout(f *Fanout, c *caddyfile.Dispenser) error {
 		return err
 	}
 	if f.Timeout < minTimeout {
-		return errors.Errorf("timeout %s is too small, minimum is %s", val, minTimeout)
+		return fmt.Errorf("timeout %s is too small, minimum is %s", val, minTimeout)
 	}
 	if f.Timeout > maxTimeout {
-		return errors.Errorf("timeout %s is too large, maximum is %s", val, maxTimeout)
+		return fmt.Errorf("timeout %s is too large, maximum is %s", val, maxTimeout)
 	}
 	return nil
 }
@@ -472,7 +473,7 @@ func parseIgnoredFromFile(f *Fanout, c *caddyfile.Dispenser) error {
 	}
 	cleanPath := filepath.Clean(args[0])
 	if !filepath.IsAbs(cleanPath) && !filepath.IsLocal(cleanPath) {
-		return errors.Errorf("path must be local: %q", args[0])
+		return fmt.Errorf("path must be local: %q", args[0])
 	}
 	readPath := cleanPath
 	if !filepath.IsAbs(cleanPath) {
@@ -486,7 +487,7 @@ func parseIgnoredFromFile(f *Fanout, c *caddyfile.Dispenser) error {
 			return err
 		}
 		if relPath == ".." || strings.HasPrefix(relPath, ".."+string(os.PathSeparator)) {
-			return errors.Errorf("path escapes working directory: %q", args[0])
+			return fmt.Errorf("path escapes working directory: %q", args[0])
 		}
 		readPath = absPath
 	}
@@ -498,7 +499,7 @@ func parseIgnoredFromFile(f *Fanout, c *caddyfile.Dispenser) error {
 	for i := range names {
 		normalized := plugin.Host(names[i]).NormalizeExact()
 		if len(normalized) == 0 {
-			return errors.Errorf("unable to normalize '%s'", names[i])
+			return fmt.Errorf("unable to normalize '%s'", names[i])
 		}
 		f.ExcludeDomains.AddString(normalized[0])
 	}
@@ -513,7 +514,7 @@ func parseIgnored(f *Fanout, c *caddyfile.Dispenser) error {
 	for i := range ignore {
 		normalized := plugin.Host(ignore[i]).NormalizeExact()
 		if len(normalized) == 0 {
-			return errors.Errorf("unable to normalize '%s'", ignore[i])
+			return fmt.Errorf("unable to normalize '%s'", ignore[i])
 		}
 		f.ExcludeDomains.AddString(normalized[0])
 	}
@@ -528,7 +529,7 @@ func parseWorkerCount(f *Fanout, c *caddyfile.Dispenser) error {
 			return errors.New("worker count should be more or equal 2. Consider to use Forward plugin")
 		}
 		if f.WorkerCount > maxWorkerCount {
-			return errors.Errorf("worker count more then max value: %v", maxWorkerCount)
+			return fmt.Errorf("worker count more then max value: %v", maxWorkerCount)
 		}
 	}
 	return err
@@ -550,7 +551,7 @@ func parseLoadFactor(f *Fanout, c *caddyfile.Dispenser) error {
 			return errors.New("load-factor should be more or equal 1")
 		}
 		if loadFactor > maxLoadFactor {
-			return errors.Errorf("load-factor %d should be less than %d", loadFactor, maxLoadFactor)
+			return fmt.Errorf("load-factor %d should be less than %d", loadFactor, maxLoadFactor)
 		}
 
 		f.loadFactor = append(f.loadFactor, loadFactor)

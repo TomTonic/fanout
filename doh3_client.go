@@ -19,13 +19,13 @@ package fanout
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
-	"github.com/pkg/errors"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 )
@@ -116,9 +116,9 @@ func bootstrapQUICDial(bootstrap *bootstrapConfig) func(ctx context.Context, add
 			lastErr = err
 		}
 		if lastErr != nil {
-			return nil, errors.Wrapf(lastErr, "bootstrap QUIC dial to %s failed", addr)
+			return nil, fmt.Errorf("bootstrap QUIC dial to %s failed: %w", addr, lastErr)
 		}
-		return nil, errors.Errorf("bootstrap QUIC dial to %s failed: no addresses resolved", addr)
+		return nil, fmt.Errorf("bootstrap QUIC dial to %s failed: no addresses resolved", addr)
 	}
 }
 

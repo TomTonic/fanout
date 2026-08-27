@@ -18,11 +18,12 @@ package fanout
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"math/rand/v2"
 	"net"
 
 	"github.com/miekg/dns"
-	"github.com/pkg/errors"
 )
 
 var bootstrapQueryTypes = []uint16{dns.TypeA, dns.TypeAAAA}
@@ -105,9 +106,9 @@ func (b *bootstrapConfig) lookup(ctx context.Context, host string) ([]string, er
 		return allIPs, nil
 	}
 	if lastErr != nil {
-		return nil, errors.Wrapf(lastErr, "bootstrap: no addresses found for %s", host)
+		return nil, fmt.Errorf("bootstrap: no addresses found for %s: %w", host, lastErr)
 	}
-	return nil, errors.Errorf("bootstrap: no addresses found for %s", host)
+	return nil, fmt.Errorf("bootstrap: no addresses found for %s", host)
 }
 
 // queryBootstrap sends a DNS query to the configured bootstrap resolvers in
@@ -137,11 +138,11 @@ func (b *bootstrapConfig) queryBootstrap(ctx context.Context, host string, qtype
 	for _, addr := range b.shuffledAddrs() {
 		resp, _, err := client.ExchangeContext(ctx, msg, addr)
 		if err != nil {
-			lastErr = errors.Wrapf(err, "bootstrap query to %s failed", addr)
+			lastErr = fmt.Errorf("bootstrap query to %s failed: %w", addr, err)
 			continue
 		}
 		if resp.Rcode != dns.RcodeSuccess {
-			lastErr = errors.Errorf("bootstrap query to %s for %s (type %d) returned rcode %d", addr, host, qtype, resp.Rcode)
+			lastErr = fmt.Errorf("bootstrap query to %s for %s (type %d) returned rcode %d", addr, host, qtype, resp.Rcode)
 			continue
 		}
 
@@ -160,7 +161,7 @@ func (b *bootstrapConfig) queryBootstrap(ctx context.Context, host string, qtype
 	if lastErr != nil {
 		return nil, lastErr
 	}
-	return nil, errors.Errorf("bootstrap query for %s (type %d) returned no usable resolvers", host, qtype)
+	return nil, fmt.Errorf("bootstrap query for %s (type %d) returned no usable resolvers", host, qtype)
 }
 
 func (b *bootstrapConfig) shuffledAddrs() []string {
@@ -190,7 +191,7 @@ func (b *bootstrapConfig) resolveHostCandidates(ctx context.Context, hostport st
 	}
 	ips, err := b.lookup(ctx, host)
 	if err != nil {
-		return nil, host, errors.Wrapf(err, "bootstrap resolution of %s failed", host)
+		return nil, host, fmt.Errorf("bootstrap resolution of %s failed: %w", host, err)
 	}
 	resolved = make([]string, 0, len(ips))
 	for _, ip := range ips {
@@ -207,7 +208,7 @@ func (b *bootstrapConfig) resolveHost(ctx context.Context, hostport string) (res
 		return "", hostname, err
 	}
 	if len(resolvedAddrs) == 0 {
-		return "", hostname, errors.Errorf("bootstrap: no addresses found for %s", hostport)
+		return "", hostname, fmt.Errorf("bootstrap: no addresses found for %s", hostport)
 	}
 	return resolvedAddrs[0], hostname, nil
 }
@@ -232,9 +233,9 @@ func (b *bootstrapConfig) dialContext() func(ctx context.Context, network, addre
 			lastErr = err
 		}
 		if lastErr != nil {
-			return nil, errors.Wrapf(lastErr, "bootstrap dial to %s failed", address)
+			return nil, fmt.Errorf("bootstrap dial to %s failed: %w", address, lastErr)
 		}
-		return nil, errors.Errorf("bootstrap dial to %s failed: no addresses resolved", address)
+		return nil, fmt.Errorf("bootstrap dial to %s failed: no addresses resolved", address)
 	}
 }
 
@@ -248,7 +249,7 @@ func detectLocalSubnetFromAny(targetAddrs []string) (*net.IPNet, error) {
 		if err == nil {
 			return subnet, nil
 		}
-		lastErr = errors.Wrapf(err, "detecting local subnet via %s", addr)
+		lastErr = fmt.Errorf("detecting local subnet via %s: %w", addr, err)
 	}
 	return nil, lastErr
 }
@@ -260,17 +261,17 @@ func detectLocalSubnetFromAny(targetAddrs []string) (*net.IPNet, error) {
 func detectLocalSubnet(targetAddr string) (*net.IPNet, error) {
 	conn, err := net.DialTimeout("udp", targetAddr, dialTimeout)
 	if err != nil {
-		return nil, errors.Wrap(err, "detecting local subnet")
+		return nil, fmt.Errorf("detecting local subnet: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
 
 	host, _, err := net.SplitHostPort(conn.LocalAddr().String())
 	if err != nil {
-		return nil, errors.Wrap(err, "parsing local address")
+		return nil, fmt.Errorf("parsing local address: %w", err)
 	}
 	ip := net.ParseIP(host)
 	if ip == nil {
-		return nil, errors.Errorf("invalid local IP %q", host)
+		return nil, fmt.Errorf("invalid local IP %q", host)
 	}
 
 	if v4 := ip.To4(); v4 != nil {
