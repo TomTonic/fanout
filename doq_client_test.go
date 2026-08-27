@@ -220,7 +220,7 @@ func handleDoQStream(stream *quic.Stream, handler dns.HandlerFunc, done chan str
 // goroutines are cleaned up. This prevents goleak from flagging them.
 func closeDoQClient(t *testing.T, c Client) {
 	t.Helper()
-	if dc, ok := c.(*doqClient); ok {
+	if dc, ok := concreteClient(c).(*doqClient); ok {
 		dc.closeConn()
 	}
 }
@@ -238,13 +238,13 @@ func TestDoQClientBasicRequest(t *testing.T) {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 
-	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
+	c := newRetryingDoQClient(t, srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
 
 	req := new(dns.Msg)
 	req.SetQuestion("example.com.", dns.TypeA)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel()
 
 	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
@@ -265,13 +265,13 @@ func TestDoQClientNXDOMAIN(t *testing.T) {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 
-	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
+	c := newRetryingDoQClient(t, srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
 
 	req := new(dns.Msg)
 	req.SetQuestion("nonexistent.example.com.", dns.TypeA)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel()
 
 	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
@@ -288,13 +288,13 @@ func TestDoQClientSERVFAIL(t *testing.T) {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 
-	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
+	c := newRetryingDoQClient(t, srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
 
 	req := new(dns.Msg)
 	req.SetQuestion("fail.example.com.", dns.TypeA)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel()
 
 	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
@@ -316,13 +316,13 @@ func TestDoQClientMultipleRecords(t *testing.T) {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 
-	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
+	c := newRetryingDoQClient(t, srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
 
 	req := new(dns.Msg)
 	req.SetQuestion("multi.example.com.", dns.TypeA)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel()
 
 	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
@@ -342,13 +342,13 @@ func TestDoQClientAAAARecord(t *testing.T) {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 
-	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
+	c := newRetryingDoQClient(t, srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
 
 	req := new(dns.Msg)
 	req.SetQuestion("example.com.", dns.TypeAAAA)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel()
 
 	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
@@ -373,14 +373,14 @@ func TestDoQClientIDPreservation(t *testing.T) {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 
-	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
+	c := newRetryingDoQClient(t, srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
 
 	req := new(dns.Msg)
 	req.SetQuestion("id-test.example.com.", dns.TypeA)
 	req.Id = 54321
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel()
 
 	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
@@ -404,14 +404,14 @@ func TestDoQClientPreservesFlags(t *testing.T) {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 
-	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
+	c := newRetryingDoQClient(t, srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
 
 	req := new(dns.Msg)
 	req.SetQuestion("flags.example.com.", dns.TypeA)
 	req.RecursionDesired = true
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel()
 
 	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
@@ -429,13 +429,13 @@ func TestDoQClientEmptyResponse(t *testing.T) {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 
-	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
+	c := newRetryingDoQClient(t, srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
 
 	req := new(dns.Msg)
 	req.SetQuestion("nodata.example.com.", dns.TypeMX)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel()
 
 	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
@@ -457,13 +457,13 @@ func TestDoQClientTXTRecord(t *testing.T) {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 
-	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
+	c := newRetryingDoQClient(t, srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
 
 	req := new(dns.Msg)
 	req.SetQuestion("txt.example.com.", dns.TypeTXT)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel()
 
 	resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
@@ -489,7 +489,7 @@ func TestDoQClientConcurrentRequests(t *testing.T) {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 
-	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
+	c := newRetryingDoQClient(t, srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
 
 	const goroutines = 10
@@ -499,7 +499,7 @@ func TestDoQClientConcurrentRequests(t *testing.T) {
 		go func() {
 			req := new(dns.Msg)
 			req.SetQuestion("concurrent.example.com.", dns.TypeA)
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 			defer cancel()
 			resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
 			if err != nil {
@@ -547,7 +547,7 @@ func TestDoQClientSetTLSConfig(t *testing.T) {
 	require.Equal(t, DOQ, c.Net())
 
 	// Verify TLS 1.3 enforcement and ALPN.
-	dc, ok := c.(*doqClient)
+	dc, ok := concreteClient(c).(*doqClient)
 	require.True(t, ok)
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
@@ -559,7 +559,7 @@ func TestDoQClientSetTLSConfig(t *testing.T) {
 func TestDoQClientTLSMinVersion(t *testing.T) {
 	c := NewDoQClient(exampleDoTAddr)
 	defer closeDoQClient(t, c)
-	dc, ok := c.(*doqClient)
+	dc, ok := concreteClient(c).(*doqClient)
 	require.True(t, ok)
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
@@ -597,7 +597,7 @@ func TestDoQClientContextCancellation(t *testing.T) {
 	// t.Cleanup that newDoQTestServer registers, which runs after this defer.
 	defer close(handlerDone)
 
-	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
+	c := newRetryingDoQClient(t, srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
 
 	req := new(dns.Msg)
@@ -623,7 +623,7 @@ func TestDoQClientConnectionReuse(t *testing.T) {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 
-	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
+	c := newRetryingDoQClient(t, srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
 
 	// Send multiple requests sequentially; all should succeed on one connection.
@@ -631,7 +631,7 @@ func TestDoQClientConnectionReuse(t *testing.T) {
 		req := new(dns.Msg)
 		req.SetQuestion("reuse.example.com.", dns.TypeA)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 		resp, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
 		cancel()
 
@@ -656,14 +656,14 @@ func TestDoQIntegrationWithFanout(t *testing.T) {
 	f := New()
 	shutdownAfterTest(t, f)
 	f.From = "."
-	doqc := newDoQClientWithTLS(srv.addr, srv.clientTLS)
+	doqc := newRetryingDoQClient(t, srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, doqc)
 	f.AddClient(doqc)
 
 	req := new(dns.Msg)
 	req.SetQuestion("fanout-doq.example.com.", dns.TypeA)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel()
 
 	resp, err := doqc.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
@@ -865,14 +865,14 @@ func TestDoQClientReconnectAfterConnectionLoss(t *testing.T) {
 		logErrIfNotNil(w.WriteMsg(msg))
 	})
 
-	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
+	c := newRetryingDoQClient(t, srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
 
 	req := new(dns.Msg)
 	req.SetQuestion("reconnect.example.com.", dns.TypeA)
 
 	// First request — establishes and caches the QUIC connection.
-	ctx1, cancel1 := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx1, cancel1 := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel1()
 	resp, err := c.Request(ctx1, &request.Request{W: &test.ResponseWriter{}, Req: req})
 	require.NoError(t, err)
@@ -880,7 +880,7 @@ func TestDoQClientReconnectAfterConnectionLoss(t *testing.T) {
 
 	// Simulate connection loss: close the cached QUIC connection from the client side
 	// without clearing it, so getOrDialConn discovers the dead connection via Context().Done().
-	dc, ok := c.(*doqClient)
+	dc, ok := concreteClient(c).(*doqClient)
 	require.True(t, ok)
 	dc.mu.Lock()
 	require.NotNil(t, dc.conn, "connection should be cached after first request")
@@ -888,7 +888,7 @@ func TestDoQClientReconnectAfterConnectionLoss(t *testing.T) {
 	dc.mu.Unlock()
 
 	// Second request should detect the dead connection and establish a new one.
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx2, cancel2 := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel2()
 	resp, err = c.Request(ctx2, &request.Request{W: &test.ResponseWriter{}, Req: req})
 	require.NoError(t, err)
@@ -1008,13 +1008,13 @@ func TestDoQClientZeroLengthResponse(t *testing.T) {
 	})
 	defer srv.close()
 
-	c := newDoQClientWithTLS(srv.addr, srv.clientTLS)
+	c := newRetryingDoQClient(t, srv.addr, srv.clientTLS)
 	defer closeDoQClient(t, c)
 
 	req := new(dns.Msg)
 	req.SetQuestion("zero.example.com.", dns.TypeA)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quicTestTimeout)
 	defer cancel()
 
 	_, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
