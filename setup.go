@@ -495,7 +495,7 @@ func parseIgnoredFromFile(f *Fanout, c *caddyfile.Dispenser) error {
 		return err
 	}
 	names := strings.Split(string(b), "\n")
-	for i := 0; i < len(names); i++ {
+	for i := range names {
 		normalized := plugin.Host(names[i]).NormalizeExact()
 		if len(normalized) == 0 {
 			return errors.Errorf("unable to normalize '%s'", names[i])
@@ -510,7 +510,7 @@ func parseIgnored(f *Fanout, c *caddyfile.Dispenser) error {
 	if len(ignore) == 0 {
 		return c.ArgErr()
 	}
-	for i := 0; i < len(ignore); i++ {
+	for i := range ignore {
 		normalized := plugin.Host(ignore[i]).NormalizeExact()
 		if len(normalized) == 0 {
 			return errors.Errorf("unable to normalize '%s'", ignore[i])

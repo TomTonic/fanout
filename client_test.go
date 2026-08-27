@@ -17,7 +17,6 @@
 package fanout
 
 import (
-	"context"
 	"math"
 	"testing"
 
@@ -49,8 +48,7 @@ func TestUseRequestSizeOnConn(t *testing.T) {
 	req.SetEdns0(dns.DefaultMsgSize, false)
 	req.SetQuestion(testQuery, dns.TypeA)
 
-	ctx, cancel := context.WithCancel(context.TODO())
-	defer cancel()
+	ctx := t.Context()
 	d, err := c.Request(ctx, &request.Request{W: &test.ResponseWriter{}, Req: req})
 	require.Nil(t, err)
 	require.Len(t, d.Answer, 3)

@@ -86,21 +86,21 @@ func TestServeDNS_ConcurrentRequests(t *testing.T) {
 	const goroutines = 50
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	var errCount int32
+	var errCount atomic.Int32
 
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			defer wg.Done()
 			req := new(dns.Msg)
 			req.SetQuestion(testQuery, dns.TypeA)
 			_, err := f.ServeDNS(context.Background(), &test.ResponseWriter{}, req)
 			if err != nil {
-				atomic.AddInt32(&errCount, 1)
+				errCount.Add(1)
 			}
 		}()
 	}
 	wg.Wait()
-	require.Equal(t, int32(0), atomic.LoadInt32(&errCount), "no ServeDNS call should fail")
+	require.Equal(t, int32(0), errCount.Load(), "no ServeDNS call should fail")
 }
 
 // TestServeDNS_MetadataUpstream verifies that after a successful fanout, the plugin sets
@@ -462,7 +462,7 @@ func TestServeDNS_ConcurrentStress_ManyServersShortTimeout(t *testing.T) {
 	const numQueries = 30
 
 	var servers []*server
-	for i := 0; i < numServers; i++ {
+	for i := range numServers {
 		delay := time.Duration(i*50) * time.Millisecond // 0ms–350ms spread
 		s := newServer(TCP, func(w dns.ResponseWriter, r *dns.Msg) {
 			time.Sleep(delay)
@@ -490,20 +490,20 @@ func TestServeDNS_ConcurrentStress_ManyServersShortTimeout(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(numQueries)
-	var errCount int32
-	for i := 0; i < numQueries; i++ {
+	var errCount atomic.Int32
+	for range numQueries {
 		go func() {
 			defer wg.Done()
 			req := new(dns.Msg)
 			req.SetQuestion(testQuery, dns.TypeA)
 			_, err := f.ServeDNS(context.Background(), &test.ResponseWriter{}, req)
 			if err != nil {
-				atomic.AddInt32(&errCount, 1)
+				errCount.Add(1)
 			}
 		}()
 	}
 	wg.Wait()
-	require.Equal(t, int32(0), atomic.LoadInt32(&errCount), "stress run should not produce errors")
+	require.Equal(t, int32(0), errCount.Load(), "stress run should not produce errors")
 	// Primary assertion: no panics, no goroutine leaks (verified by goleak).
 }
 
@@ -581,7 +581,7 @@ func TestServeDNS_ThreeServersSelectBestResponse(t *testing.T) {
 	f.AddClient(NewClient(s3.addr, TCP))
 
 	writer := &cachedDNSWriter{ResponseWriter: new(test.ResponseWriter)}
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		req := new(dns.Msg)
 		req.SetQuestion(testQuery, dns.TypeA)
 		_, err := f.ServeDNS(context.Background(), writer, req)
