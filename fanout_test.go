@@ -119,6 +119,26 @@ func newServer(tb testing.TB, network string, f dns.HandlerFunc) *server {
 	return srv
 }
 
+// verifyNoLeaks asserts that a test leaves behind no goroutine that it started.
+//
+// The baseline matters. goleak.VerifyNone inspects every goroutine in the process, not
+// only those belonging to the calling test, so a neighbour's teardown that is still in
+// motion - a socket mid-close, a losing Happy Eyeballs dial unwinding - gets reported
+// against whichever test happens to check at that moment. That is what made
+// TestServeDNS_ThreeServersSelectBestResponse and TestFanoutTCPSuite fail
+// intermittently, and it got easier to hit once the suite stopped spacing tests out
+// with multi-second sleeps.
+//
+// IgnoreCurrent records what is already running at the start of the test, so only
+// goroutines this test is responsible for can fail it. Registering the check here also
+// puts it first in the cleanup order, which - cleanups being LIFO - means it runs last,
+// after every server and client the test registers afterwards has shut down.
+func verifyNoLeaks(tb testing.TB) {
+	tb.Helper()
+	ignore := goleak.IgnoreCurrent()
+	tb.Cleanup(func() { goleak.VerifyNone(tb, ignore) })
+}
+
 // shutdownAfterTest registers f's shutdown with tb, so the upstream clients built
 // during Corefile parsing are closed when the test ends rather than outliving it.
 // This matters most for h3:// upstreams, whose transports otherwise sit around until
@@ -171,7 +191,7 @@ func TestFanout_ExceptFile(t *testing.T) {
 // Parses a Corefile with "fanout . <addr> { NETWORK <net> }", starts the plugin lifecycle (OnStartup),
 // sends a query, and asserts the correct answer is returned. Runs for both UDP and TCP via the suite.
 func (t *fanoutTestSuite) TestConfigFromCorefile() {
-	t.T().Cleanup(func() { goleak.VerifyNone(t.T()) })
+	verifyNoLeaks(t.T())
 	s := newServer(t.T(), t.network, func(w dns.ResponseWriter, r *dns.Msg) {
 		ret := new(dns.Msg)
 		ret.SetReply(r)
@@ -203,7 +223,7 @@ func (t *fanoutTestSuite) TestConfigFromCorefile() {
 // Sets up 5 servers but WorkerCount=1, so only one server is contacted per query.
 // Asserts exactly one answer is produced and no extra goroutines leak.
 func (t *fanoutTestSuite) TestWorkerCountLessThenServers() {
-	t.T().Cleanup(func() { goleak.VerifyNone(t.T()) })
+	verifyNoLeaks(t.T())
 	const expected = 1
 	answerCount := 0
 	var mutex sync.Mutex
@@ -246,7 +266,7 @@ func (t *fanoutTestSuite) TestWorkerCountLessThenServers() {
 // (cycling through all rcodes) and the other returns success, the plugin always prefers the
 // successful response. Sends 10 queries and asserts every written answer has RcodeSuccess.
 func (t *fanoutTestSuite) TestTwoServersUnsuccessfulResponse() {
-	t.T().Cleanup(func() { goleak.VerifyNone(t.T()) })
+	verifyNoLeaks(t.T())
 	rcode := 1
 	rcodeMutex := sync.Mutex{}
 	s1 := newServer(t.T(), t.network, func(w dns.ResponseWriter, r *dns.Msg) {
@@ -293,7 +313,7 @@ func (t *fanoutTestSuite) TestTwoServersUnsuccessfulResponse() {
 // there is no successful answer to prefer, the plugin still forwards the first negative response
 // to the client rather than producing an error.
 func (t *fanoutTestSuite) TestCanReturnUnsuccessfulRepose() {
-	t.T().Cleanup(func() { goleak.VerifyNone(t.T()) })
+	verifyNoLeaks(t.T())
 	s := newServer(t.T(), t.network, func(w dns.ResponseWriter, r *dns.Msg) {
 		msg := nxdomainMsg()
 		msg.SetRcode(r, msg.Rcode)
@@ -318,7 +338,7 @@ func (t *fanoutTestSuite) TestCanReturnUnsuccessfulRepose() {
 // A server that drops every other request should eventually answer all queries.
 // Sends 5 queries and asserts that 5 successful answers are received.
 func (t *fanoutTestSuite) TestBusyServer() {
-	t.T().Cleanup(func() { goleak.VerifyNone(t.T()) })
+	verifyNoLeaks(t.T())
 	var requestNum, answerCount int32
 	totalRequestNum := int32(5)
 	s := newServer(t.T(), t.network, func(w dns.ResponseWriter, r *dns.Msg) {
@@ -353,7 +373,7 @@ func (t *fanoutTestSuite) TestBusyServer() {
 // "example1.", server 2 answers "example2.". After both queries, each server has been
 // contacted exactly once, confirming fanout routes to all configured upstreams.
 func (t *fanoutTestSuite) TestTwoServers() {
-	t.T().Cleanup(func() { goleak.VerifyNone(t.T()) })
+	verifyNoLeaks(t.T())
 	const expected = 1
 	var mutex sync.Mutex
 	answerCount1 := 0
@@ -411,7 +431,7 @@ func (t *fanoutTestSuite) TestTwoServers() {
 // With serverCount=1 and a WeightedPolicy, only one of two servers should be contacted.
 // Asserts exactly one answer is produced.
 func (t *fanoutTestSuite) TestServerCount() {
-	t.T().Cleanup(func() { goleak.VerifyNone(t.T()) })
+	verifyNoLeaks(t.T())
 	const expected = 1
 	var mutex sync.Mutex
 	answerCount := 0
