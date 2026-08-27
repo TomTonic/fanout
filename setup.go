@@ -466,6 +466,40 @@ func parseECS(f *Fanout, c *caddyfile.Dispenser) error {
 	return nil
 }
 
+// readExceptFile reads an except-file, keeping relative paths confined to the working
+// directory.
+//
+// Containment is delegated to os.Root rather than compared by hand. The previous
+// filepath.Rel check could be walked straight past by a symlink pointing out of the
+// working directory, so the "path escapes working directory" error it promised was not
+// actually enforced; it also left a window between the check and the read in which the
+// path could change. os.Root resolves every component under the root, symlinks included,
+// and rejects anything that leaves it.
+//
+// Absolute paths stay exempt: they are an explicit choice by whoever wrote the Corefile,
+// and they remain the supported way to load a list from elsewhere on the filesystem.
+func readExceptFile(cleanPath string) ([]byte, error) {
+	if filepath.IsAbs(cleanPath) {
+		return os.ReadFile(cleanPath)
+	}
+
+	workDir, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(workDir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close() //nolint:errcheck // read-only handle
+
+	b, err := root.ReadFile(cleanPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading except-file %q: %w", cleanPath, err)
+	}
+	return b, nil
+}
+
 func parseIgnoredFromFile(f *Fanout, c *caddyfile.Dispenser) error {
 	args := c.RemainingArgs()
 	if len(args) != 1 {
@@ -475,23 +509,8 @@ func parseIgnoredFromFile(f *Fanout, c *caddyfile.Dispenser) error {
 	if !filepath.IsAbs(cleanPath) && !filepath.IsLocal(cleanPath) {
 		return fmt.Errorf("path must be local: %q", args[0])
 	}
-	readPath := cleanPath
-	if !filepath.IsAbs(cleanPath) {
-		workDir, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		absPath := filepath.Join(workDir, cleanPath)
-		relPath, err := filepath.Rel(workDir, absPath)
-		if err != nil {
-			return err
-		}
-		if relPath == ".." || strings.HasPrefix(relPath, ".."+string(os.PathSeparator)) {
-			return fmt.Errorf("path escapes working directory: %q", args[0])
-		}
-		readPath = absPath
-	}
-	b, err := os.ReadFile(readPath)
+
+	b, err := readExceptFile(cleanPath)
 	if err != nil {
 		return err
 	}
