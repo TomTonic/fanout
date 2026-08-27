@@ -71,13 +71,6 @@ func (s *server) close() {
 	logErrIfNotNil(s.inner.Shutdown())
 }
 
-// newServer starts a DNS test server and registers its shutdown with tb, so callers
-// do not carry a defer. It takes testing.TB rather than *testing.T because one caller
-// is a benchmark.
-//
-// Shutdown runs as a cleanup, which is after the caller's own defers. A test that
-// unblocks a parked handler by defer therefore still releases it before the server
-// waits on it in Shutdown.
 // testListenHost is the address every test server binds to.
 //
 // It must be a concrete loopback address, not the wildcard ":0". A wildcard bind
@@ -96,6 +89,13 @@ func (s *server) close() {
 // 1.07s to 394us and dials got about twice as fast.
 const testListenHost = "127.0.0.1"
 
+// newServer starts a DNS test server and registers its shutdown with tb, so callers
+// do not carry a defer. It takes testing.TB rather than *testing.T because one caller
+// is a benchmark.
+//
+// Shutdown runs as a cleanup, which is after the caller's own defers. A test that
+// unblocks a parked handler by defer therefore still releases it before the server
+// waits on it in Shutdown.
 func newServer(tb testing.TB, network string, f dns.HandlerFunc) *server {
 	tb.Helper()
 	ch := make(chan bool)
@@ -135,6 +135,26 @@ func newServer(tb testing.TB, network string, f dns.HandlerFunc) *server {
 	srv := &server{inner: s, addr: s.Listener.Addr().String()}
 	tb.Cleanup(srv.close)
 	return srv
+}
+
+// testReadTimeout is the per-attempt response read budget for upstreams that a test
+// deliberately leaves silent.
+//
+// The production default is readTimeout (2s), which is right for a real network and
+// wrong for a loopback test: a test server that never answers cost a full two seconds
+// per attempt. That single constant accounted for roughly three quarters of the
+// suite's runtime - TestBusyServer paid it five times and TestWorkerCountLessThenServers
+// four times, in each of the UDP and TCP suites. Over loopback a response either
+// arrives in microseconds or is not coming at all, so 50ms is generous.
+const testReadTimeout = 50 * time.Millisecond
+
+// newFastClient is NewClient with the short per-attempt read timeout above. Use it
+// wherever a test depends on an upstream *not* answering; use NewClient when the
+// production timeout is what is under test.
+func newFastClient(addr, network string) Client {
+	c := NewClient(addr, network).(*client)
+	c.readTimeoutOverride = testReadTimeout
+	return c
 }
 
 // verifyNoLeaks asserts that a test leaves behind no goroutine that it started.
@@ -249,10 +269,13 @@ func (t *fanoutTestSuite) TestWorkerCountLessThenServers() {
 	shutdownAfterTest(t.T(), f)
 	f.From = "."
 
+	// These four never answer. With WorkerCount=1 they are contacted one after the
+	// other, so each one costs a full response read timeout before the real server is
+	// reached - the short test budget keeps that to milliseconds.
 	for range 4 {
 		incorrectServer := newServer(t.T(), t.network, func(_ dns.ResponseWriter, _ *dns.Msg) {
 		})
-		f.AddClient(NewClient(incorrectServer.addr, t.network))
+		f.AddClient(newFastClient(incorrectServer.addr, t.network))
 	}
 	correctServer := newServer(t.T(), t.network, func(w dns.ResponseWriter, r *dns.Msg) {
 		if r.Question[0].Name == testQuery {
@@ -267,14 +290,17 @@ func (t *fanoutTestSuite) TestWorkerCountLessThenServers() {
 		}
 	})
 
-	f.AddClient(NewClient(correctServer.addr, t.network))
+	f.AddClient(newFastClient(correctServer.addr, t.network))
 	f.WorkerCount = 1
 	f.Attempts = 1
 	req := new(dns.Msg)
 	req.SetQuestion(testQuery, dns.TypeA)
 	_, err := f.ServeDNS(context.TODO(), &test.ResponseWriter{}, req)
 	t.Nil(err)
-	<-time.After(time.Second)
+	// No settle time needed. The handler increments answerCount before it writes the
+	// reply, and that write is what lets ServeDNS return, so the count is already
+	// final here. A second contact is impossible too: WorkerCount=1 means one worker
+	// walking the upstreams in sequence, and Attempts=1 means it visits each once.
 	mutex.Lock()
 	defer mutex.Unlock()
 	t.Equal(answerCount, expected)
@@ -371,7 +397,10 @@ func (t *fanoutTestSuite) TestBusyServer() {
 		}
 		atomic.AddInt32(&requestNum, 1)
 	})
-	c := NewClient(s.addr, t.network)
+	// The server stays silent on every other request, and Attempts=0 means fanout
+	// retries until it gets an answer. Each silent round therefore costs one response
+	// read timeout, so use the short test budget rather than the 2s production one.
+	c := newFastClient(s.addr, t.network)
 	f := New()
 	shutdownAfterTest(t.T(), f)
 	f.net = t.network
@@ -434,7 +463,9 @@ func (t *fanoutTestSuite) TestTwoServers() {
 	req.SetQuestion(testQuery, dns.TypeA)
 	_, err := f.ServeDNS(context.TODO(), &test.ResponseWriter{}, req)
 	t.Nil(err)
-	<-time.After(time.Second)
+	// No settle time needed: each handler increments its counter before writing the
+	// reply that releases ServeDNS, and the other server ignores a name it does not
+	// own, so neither counter can still move once the call has returned.
 	req = new(dns.Msg)
 	req.SetQuestion("example2.", dns.TypeA)
 	_, err = f.ServeDNS(context.TODO(), &test.ResponseWriter{}, req)
