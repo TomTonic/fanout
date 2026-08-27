@@ -458,11 +458,14 @@ func TestExceptFile_TooManyArguments(t *testing.T) {
 // Uses a server that sleeps 10 s with a 500 ms plugin timeout.
 func TestServeDNS_AllServersTimeout(t *testing.T) {
 	defer goleak.VerifyNone(t)
-	// Server never responds
+	// Server never responds. Blocking on a channel rather than sleeping keeps
+	// dns.Server.Shutdown from waiting out a timer that the test no longer needs.
+	unblock := make(chan struct{})
 	s := newServer(TCP, func(_ dns.ResponseWriter, _ *dns.Msg) {
-		time.Sleep(10 * time.Second)
+		<-unblock
 	})
-	defer s.close()
+	defer s.close()       // runs last
+	defer close(unblock)  // runs first, so the handler is gone before Shutdown
 
 	f := New()
 	f.From = "."

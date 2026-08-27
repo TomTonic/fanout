@@ -174,11 +174,13 @@ func newDoH3TestServer(t *testing.T, handler dns.HandlerFunc) *doh3TestServer { 
 }
 
 // closeDoH3Client shuts down the underlying QUIC transport(s) so that their background goroutines
-// are cleaned up. This includes any orphaned transports from previous SetTLSConfig calls.
+// are cleaned up. This includes any orphaned transports from previous SetTLSConfig calls, and the
+// grace-period goroutines still waiting to close them — hence Close rather than closeTransports,
+// which would leave those waiting for the full delay and trip goleak in a later test.
 func closeDoH3Client(t *testing.T, c Client) {
 	t.Helper()
 	if dc, ok := c.(*doh3Client); ok {
-		dc.closeTransports()
+		require.NoError(t, dc.Close())
 	}
 }
 
@@ -611,11 +613,14 @@ func TestDoH3ClientServerDown(t *testing.T) {
 
 // TestDoH3ClientContextCancellation verifies that a cancelled context aborts the HTTP/3 request.
 func TestDoH3ClientContextCancellation(t *testing.T) {
+	// Handler never answers, so the context timeout is what ends the request. Blocking
+	// on a channel instead of sleeping lets the test release it before srv.close().
+	unblock := make(chan struct{})
 	srv := newDoH3TestServer(t, func(_ dns.ResponseWriter, _ *dns.Msg) {
-		// Slow handler: sleep longer than the context timeout.
-		time.Sleep(10 * time.Second)
+		<-unblock
 	})
-	defer srv.close()
+	defer srv.close()     // runs last
+	defer close(unblock)  // runs first, so the handler is gone before shutdown
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
