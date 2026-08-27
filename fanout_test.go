@@ -78,34 +78,52 @@ func (s *server) close() {
 // Shutdown runs as a cleanup, which is after the caller's own defers. A test that
 // unblocks a parked handler by defer therefore still releases it before the server
 // waits on it in Shutdown.
+// testListenHost is the address every test server binds to.
+//
+// It must be a concrete loopback address, not the wildcard ":0". A wildcard bind
+// reports its address back as "[::]:port", and dialing the unspecified address sends
+// Go down the dual-stack Happy Eyeballs path (net.resolveAddrList expands "::" into
+// both loopback families, so sysDialer.dialParallel runs instead of dialSerial).
+// That path costs a second socket, two extra goroutines and a 300ms fallback timer
+// per dial, and the losing branch outlives the request: after ServeDNS picks a winner
+// and cancels, a dial parked in dialParallel kept the whole worker tree alive for
+// ~1s in about a quarter of requests, which is longer than goleak's ~431ms retry
+// budget - the direct cause of the intermittent "found unexpected goroutines"
+// failures in TestServeDNS_ThreeServersSelectBestResponse and TestFanoutTCPSuite.
+//
+// Binding loopback explicitly yields a single candidate address, so dialParallel is
+// never reached. Measured over 20 request bursts, worst-case teardown dropped from
+// 1.07s to 394us and dials got about twice as fast.
+const testListenHost = "127.0.0.1"
+
 func newServer(tb testing.TB, network string, f dns.HandlerFunc) *server {
 	tb.Helper()
 	ch := make(chan bool)
 	s := &dns.Server{}
 	s.Handler = f
 
+	// A UDP server needs the same port on both protocols, and the TCP bind is what
+	// allocates it. That can lose a race against another process, so retry - closing
+	// the TCP listener first, or the next attempt leaks it.
 	for range 10 {
-		if network == TCP {
-			s.Listener, _ = net.Listen(TCP, ":0")
-			if s.Listener != nil {
-				break
-			}
-		} else {
-			s.Listener, _ = net.Listen(TCP, ":0")
-			if s.Listener == nil {
-				continue
-			}
-			s.PacketConn, _ = net.ListenPacket("udp", s.Listener.Addr().String())
-			if s.PacketConn != nil {
-				break
-			}
+		l, err := net.Listen(TCP, testListenHost+":0")
+		if err != nil {
+			continue
 		}
-		if s.Listener != nil {
+		if network == TCP {
+			s.Listener = l
 			break
 		}
+		pc, err := net.ListenPacket(UDP, l.Addr().String())
+		if err != nil {
+			logErrIfNotNil(l.Close())
+			continue
+		}
+		s.Listener, s.PacketConn = l, pc
+		break
 	}
-	if s.Listener == nil {
-		panic("failed to create new client")
+	if s.Listener == nil || (network != TCP && s.PacketConn == nil) {
+		panic("failed to bind a test server on " + testListenHost)
 	}
 
 	s.NotifyStartedFunc = func() { close(ch) }
