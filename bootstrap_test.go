@@ -366,6 +366,7 @@ func TestParseBootstrap(t *testing.T) {
 	}`
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 	require.NoError(t, err)
 	require.NotNil(t, f.bootstrap)
 	require.Equal(t, []string{"9.9.9.11:53", "149.112.112.11:5353"}, f.bootstrap.addrs)
@@ -409,6 +410,7 @@ func TestParseECSExplicitCIDR(t *testing.T) {
 			}`
 			c := caddy.NewTestController("dns", input)
 			f, err := parseFanout(c)
+			shutdownAfterTest(t, f)
 			require.NoError(t, err)
 			require.NotNil(t, f.bootstrap)
 			require.NotNil(t, f.bootstrap.ecs)
@@ -458,6 +460,7 @@ func TestParseECSAutoDetect(t *testing.T) {
 	}`
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 	require.NoError(t, err)
 	require.NotNil(t, f.bootstrap)
 	require.NotNil(t, f.bootstrap.ecs, "auto-detected ECS should be set")

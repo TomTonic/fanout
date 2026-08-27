@@ -640,6 +640,7 @@ func TestSetup_TLSConfig(t *testing.T) {
 }`, certFile, keyFile)
 	c := caddy.NewTestController("dns", source)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 	require.NoError(t, err)
 	require.NotNil(t, f.tlsConfig)
 }
@@ -652,6 +653,7 @@ func TestSetup_TLSServer(t *testing.T) {
 }`
 	c := caddy.NewTestController("dns", source)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 	require.NoError(t, err)
 	require.Equal(t, "myserver.example.com", f.tlsServerName)
 }
@@ -665,6 +667,7 @@ func TestSetup_TLSServernameAlias(t *testing.T) {
 }`
 	c := caddy.NewTestController("dns", source)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 	require.NoError(t, err)
 	require.Equal(t, "myserver.example.com", f.tlsServerName)
 }
@@ -676,6 +679,7 @@ func TestSetup_Race(t *testing.T) {
 }`
 	c := caddy.NewTestController("dns", source)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 	require.NoError(t, err)
 	require.True(t, f.Race)
 }

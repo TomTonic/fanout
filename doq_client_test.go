@@ -713,6 +713,7 @@ func TestSetupDoQConfig(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := caddy.NewTestController("dns", tc.input)
 			f, err := parseFanout(c)
+			shutdownAfterTest(t, f)
 
 			require.NoError(t, err)
 			require.Len(t, f.clients, len(tc.expectedURLs))
@@ -732,6 +733,7 @@ func TestSetupDoQNetworkProtocol(t *testing.T) {
 	}`
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.Equal(t, DOQ, f.net)
@@ -745,6 +747,7 @@ func TestSetupDoQWithOptions(t *testing.T) {
 	}`
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.Len(t, f.clients, 2)
@@ -761,6 +764,7 @@ func TestSetupDoQWithRace(t *testing.T) {
 	}`
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.True(t, f.Race)
@@ -774,6 +778,7 @@ func TestSetupDoQWithExcept(t *testing.T) {
 	}`
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.True(t, f.ExcludeDomains.Contains("internal.example.com."))
@@ -793,6 +798,7 @@ func TestSetupDoQCaseInsensitive(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := caddy.NewTestController("dns", tc.input)
 			f, err := parseFanout(c)
+			shutdownAfterTest(t, f)
 			require.NoError(t, err)
 			require.Len(t, f.clients, 1)
 			require.Equal(t, DOQ, f.clients[0].Net())
@@ -805,6 +811,7 @@ func TestSetupDoQMixedWithTLS(t *testing.T) {
 	input := "fanout . tls://1.1.1.1 quic://dns.google:853 {\ntls-server cloudflare\n}"
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.Len(t, f.clients, 2)
@@ -824,6 +831,7 @@ func TestSetupAllFourTransports(t *testing.T) {
 	input := corefileAllDoHDoQ
 	c := caddy.NewTestController("dns", input)
 	f, err := parseFanout(c)
+	shutdownAfterTest(t, f)
 
 	require.NoError(t, err)
 	require.Len(t, f.clients, 4)
@@ -1032,6 +1040,7 @@ func TestDoQDoesNotBreakExistingSetup(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := caddy.NewTestController("dns", tc.input)
 			f, err := parseFanout(c)
+			shutdownAfterTest(t, f)
 			require.NoError(t, err)
 			require.Len(t, f.clients, tc.expectedN)
 			require.Equal(t, tc.expectedNet, f.net)

@@ -632,6 +632,7 @@ func TestExceptFile_AbsolutePathOutsideWorkdirIsAllowed(t *testing.T) {
 	source := "fanout . 127.0.0.1 {\nexcept-file " + targetPath + "\n}"
 	c := caddy.NewTestController("dns", source)
 	f, parseErr := parseFanout(c)
+	shutdownAfterTest(t, f)
 	require.NoError(t, parseErr, "absolute paths stay exempt from containment")
 	require.True(t, f.ExcludeDomains.Contains("absolute-target.example.com."),
 		"domain from the absolute-path file must be loaded")

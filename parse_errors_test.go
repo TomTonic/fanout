@@ -100,6 +100,7 @@ func TestParseExceptFileRelativeOK(t *testing.T) {
 	input := "fanout . 127.0.0.1 {\nexcept-file " + relPath + "\n}"
 	c := caddy.NewTestController("dns", input)
 	fan, err := parseFanout(c)
+	shutdownAfterTest(t, fan)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
