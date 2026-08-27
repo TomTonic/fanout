@@ -619,8 +619,8 @@ func TestDoH3ClientContextCancellation(t *testing.T) {
 	srv := newDoH3TestServer(t, func(_ dns.ResponseWriter, _ *dns.Msg) {
 		<-unblock
 	})
-	defer srv.close()     // runs last
-	defer close(unblock)  // runs first, so the handler is gone before shutdown
+	defer srv.close()    // runs last
+	defer close(unblock) // runs first, so the handler is gone before shutdown
 
 	c := newDoH3ClientWithTLS(srv.url(), srv.clientTLS)
 	defer closeDoH3Client(t, c)
