@@ -31,7 +31,7 @@ import (
 // A query with dns.DefaultMsgSize is sent to a dummy server returning three large A records.
 // The test asserts all three records arrive intact, confirming the buffer size is set correctly.
 func TestUseRequestSizeOnConn(t *testing.T) {
-	s := newServer("udp", func(w dns.ResponseWriter, r *dns.Msg) {
+	s := newServer(t, "udp", func(w dns.ResponseWriter, r *dns.Msg) {
 		msg := dns.Msg{
 			Answer: []dns.RR{
 				makeRecordA("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijk.abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijk.abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijk. 3600	IN	A 10.0.0.1"),
@@ -42,7 +42,6 @@ func TestUseRequestSizeOnConn(t *testing.T) {
 		msg.SetReply(r)
 		logErrIfNotNil(w.WriteMsg(&msg))
 	})
-	defer s.close()
 	c := NewClient(s.addr, "udp")
 	req := new(dns.Msg)
 	req.SetEdns0(dns.DefaultMsgSize, false)
