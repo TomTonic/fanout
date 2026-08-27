@@ -27,6 +27,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -42,7 +43,6 @@ import (
 	"github.com/coredns/coredns/plugin/test"
 	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
-	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -197,18 +197,15 @@ func classifyRealWorldRestriction(err error) (blocked bool, reason string) {
 }
 
 func isTLSEnvironmentRestriction(err error) bool {
-	var unknownAuthorityErr x509.UnknownAuthorityError
-	if errors.As(err, &unknownAuthorityErr) {
+	if _, ok := errors.AsType[x509.UnknownAuthorityError](err); ok {
 		return true
 	}
 
-	var hostnameErr x509.HostnameError
-	if errors.As(err, &hostnameErr) {
+	if _, ok := errors.AsType[x509.HostnameError](err); ok {
 		return true
 	}
 
-	var certInvalidErr x509.CertificateInvalidError
-	if errors.As(err, &certInvalidErr) {
+	if _, ok := errors.AsType[x509.CertificateInvalidError](err); ok {
 		return true
 	}
 
@@ -220,8 +217,7 @@ func isTLSEnvironmentRestriction(err error) bool {
 }
 
 func isNetworkEnvironmentRestriction(err error) bool {
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
+	if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
 		return true
 	}
 

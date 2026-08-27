@@ -110,8 +110,7 @@ func BenchmarkDomain_ContainsMatch(b *testing.B) {
 			d.AddString(samples[len(samples)-1])
 		}
 	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		for j := 0; j < 10000; j++ {
 			d.Contains(samples[j])
 		}
@@ -126,7 +125,7 @@ func BenchmarkDomain_AddString(b *testing.B) {
 			samples = append(samples, genSample(i+1))
 		}
 	}
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		for j := 0; j < len(samples); j++ {
 			d.AddString(samples[j])
 		}
@@ -142,8 +141,7 @@ func BenchmarkDomain_ContainsAny(b *testing.B) {
 			samples = append(samples, genSample(i+1))
 		}
 	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		for j := 0; j < len(samples); j++ {
 			d.Contains(samples[j])
 		}
