@@ -132,11 +132,14 @@ func (t *transportImpl) Dial(ctx context.Context, network string) (*dns.Conn, er
 	}
 
 	if network == TCPTLS {
-		return t.dial(ctx, &dns.Client{Net: network, Dialer: &net.Dialer{Timeout: dialTimeout}, TLSConfig: tlsCfg})
+		return t.dial(ctx, &dns.Client{Net: network, TLSConfig: tlsCfg})
 	}
-	return t.dial(ctx, &dns.Client{Net: network, Dialer: &net.Dialer{Timeout: dialTimeout}})
+	return t.dial(ctx, &dns.Client{Net: network})
 }
 
+// dial establishes a new connection. It carries no dial timeout of its own: the ctx
+// deadline set by processClient (see attemptBudget) is what bounds it, since
+// DialContext already honours ctx cancellation.
 func (t *transportImpl) dial(ctx context.Context, c *dns.Client) (*dns.Conn, error) {
 	span := ot.SpanFromContext(ctx)
 	if span != nil {
@@ -145,9 +148,7 @@ func (t *transportImpl) dial(ctx context.Context, c *dns.Client) (*dns.Conn, err
 		defer childSpan.Finish()
 	}
 	var d net.Dialer
-	if c.Dialer == nil {
-		d = net.Dialer{Timeout: dialTimeout}
-	} else {
+	if c.Dialer != nil {
 		d = *c.Dialer
 	}
 	network := cmp.Or(c.Net, UDP)

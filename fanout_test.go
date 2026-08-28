@@ -137,25 +137,17 @@ func newServer(tb testing.TB, network string, f dns.HandlerFunc) *server {
 	return srv
 }
 
-// testReadTimeout is the per-attempt response read budget for upstreams that a test
-// deliberately leaves silent.
+// testTimeout is a Fanout.Timeout for tests whose upstreams are deliberately left
+// silent, so the per-attempt budget attemptBudget derives from it (see fanout.go) stays
+// short instead of the production default.
 //
-// The production default is readTimeout (2s), which is right for a real network and
-// wrong for a loopback test: a test server that never answers cost a full two seconds
-// per attempt. That single constant accounted for roughly three quarters of the
-// suite's runtime - TestBusyServer paid it five times and TestWorkerCountLessThenServers
-// four times, in each of the UDP and TCP suites. Over loopback a response either
-// arrives in microseconds or is not coming at all, so 50ms is generous.
-const testReadTimeout = 50 * time.Millisecond
-
-// newFastClient is NewClient with the short per-attempt read timeout above. Use it
-// wherever a test depends on an upstream *not* answering; use NewClient when the
-// production timeout is what is under test.
-func newFastClient(addr, network string) Client {
-	c := NewClient(addr, network).(*client)
-	c.readTimeoutOverride = testReadTimeout
-	return c
-}
+// A silent upstream costs one full per-attempt budget before the caller moves on. With
+// the production default (30s / 3 attempts, capped at maxAttemptBudget) that is 4s per
+// silent contact. That single value accounted for roughly three quarters of the suite's
+// runtime - TestBusyServer paid it five times and TestWorkerCountLessThenServers four
+// times, in each of the UDP and TCP suites. Over loopback a response either arrives in
+// microseconds or is not coming at all, so 50ms is generous.
+const testTimeout = 50 * time.Millisecond
 
 // verifyNoLeaks asserts that a test leaves behind no goroutine that it started.
 //
@@ -269,13 +261,19 @@ func (t *fanoutTestSuite) TestWorkerCountLessThenServers() {
 	shutdownAfterTest(t.T(), f)
 	f.From = "."
 
-	// These four never answer. With WorkerCount=1 they are contacted one after the
-	// other, so each one costs a full response read timeout before the real server is
-	// reached - the short test budget keeps that to milliseconds.
+	// These four answer immediately with SERVFAIL rather than staying silent. With
+	// WorkerCount=1 they are contacted one after the other before the real server is
+	// reached, and an immediate response - rather than a deliberately silent upstream -
+	// keeps that walk fast without needing to shrink Fanout.Timeout: processClient's
+	// retry loop only waits out the per-attempt budget when an upstream fails to
+	// respond at all, not when it responds quickly with a non-success Rcode.
 	for range 4 {
-		incorrectServer := newServer(t.T(), t.network, func(_ dns.ResponseWriter, _ *dns.Msg) {
+		incorrectServer := newServer(t.T(), t.network, func(w dns.ResponseWriter, r *dns.Msg) {
+			msg := new(dns.Msg)
+			msg.SetRcode(r, dns.RcodeServerFailure)
+			logErrIfNotNil(w.WriteMsg(msg))
 		})
-		f.AddClient(newFastClient(incorrectServer.addr, t.network))
+		f.AddClient(NewClient(incorrectServer.addr, t.network))
 	}
 	correctServer := newServer(t.T(), t.network, func(w dns.ResponseWriter, r *dns.Msg) {
 		if r.Question[0].Name == testQuery {
@@ -290,7 +288,7 @@ func (t *fanoutTestSuite) TestWorkerCountLessThenServers() {
 		}
 	})
 
-	f.AddClient(newFastClient(correctServer.addr, t.network))
+	f.AddClient(NewClient(correctServer.addr, t.network))
 	f.WorkerCount = 1
 	f.Attempts = 1
 	req := new(dns.Msg)
@@ -378,9 +376,16 @@ func (t *fanoutTestSuite) TestCanReturnUnsuccessfulRepose() {
 	t.Equal(writer.answers[0].Rcode, dns.RcodeNameError, "fanout plugin returns first negative answer if other answers on request are negative")
 }
 
-// TestBusyServer verifies the retry loop during request forwarding with Attempts=0 (infinite retries).
-// A server that drops every other request should eventually answer all queries.
-// Sends 5 queries and asserts that 5 successful answers are received.
+// TestBusyServer verifies the retry loop during request forwarding: a server that drops
+// every other request should eventually answer all queries. Sends 5 queries and asserts
+// that 5 successful answers are received.
+//
+// This uses a large bounded Attempts rather than 0 (infinite retries). With Attempts==0,
+// attemptBudget gives every attempt the full maxAttemptBudget (4s) regardless of
+// f.Timeout, since there is no attempt count to divide it by - so this test would cost
+// up to 4s per silent round instead of the millisecond-scale budget below. Attempts==0's
+// own contract (retry until Timeout, never hang past it) is covered separately by
+// TestServeDNS_InfiniteRetryWithContextTimeout.
 func (t *fanoutTestSuite) TestBusyServer() {
 	verifyNoLeaks(t.T())
 	var requestNum, answerCount int32
@@ -397,15 +402,19 @@ func (t *fanoutTestSuite) TestBusyServer() {
 		}
 		atomic.AddInt32(&requestNum, 1)
 	})
-	// The server stays silent on every other request, and Attempts=0 means fanout
-	// retries until it gets an answer. Each silent round therefore costs one response
-	// read timeout, so use the short test budget rather than the 2s production one.
-	c := newFastClient(s.addr, t.network)
+	c := NewClient(s.addr, t.network)
 	f := New()
 	shutdownAfterTest(t.T(), f)
 	f.net = t.network
 	f.From = "."
-	f.Attempts = 0
+	// Attempts and Timeout are chosen together: attemptBudget is timeout/Attempts
+	// (capped at maxAttemptBudget), and picking them this way lands it on testTimeout
+	// while leaving Timeout - the actual backstop, since each round also pays
+	// attemptDelay between attempts - room for well over a dozen rounds. The server
+	// stays silent on every other contact, so a run of consecutive silent contacts
+	// long enough to exhaust that margin is not realistically expected.
+	f.Attempts = 40
+	f.Timeout = time.Duration(f.Attempts) * testTimeout
 	f.AddClient(c)
 	req := new(dns.Msg)
 	req.SetQuestion(testQuery, dns.TypeA)

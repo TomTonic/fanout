@@ -88,7 +88,7 @@ func newHTTP2ClientWithBootstrap(tlsConfig *tls.Config, bootstrap *bootstrapConf
 	if bootstrap != nil {
 		dialCtx = bootstrap.dialContext()
 	} else {
-		dialCtx = (&net.Dialer{Timeout: dialTimeout}).DialContext
+		dialCtx = (&net.Dialer{}).DialContext
 	}
 	tr := &http.Transport{
 		TLSClientConfig:     tlsConfig,
@@ -98,9 +98,11 @@ func newHTTP2ClientWithBootstrap(tlsConfig *tls.Config, bootstrap *bootstrapConf
 		IdleConnTimeout:     90 * time.Second,
 		DialContext:         dialCtx,
 	}
+	// No Client.Timeout: NewRequestWithContext already carries the per-attempt
+	// deadline set by processClient (see attemptBudget), and that is the only clock
+	// that should govern a request.
 	return &http.Client{
 		Transport: tr,
-		Timeout:   readTimeout + dialTimeout,
 	}
 }
 

@@ -38,6 +38,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestAttemptBudget verifies the per-attempt context budget carved out by processClient
+// (see issue #47): one gross clock shared by every transport, min(maxAttemptBudget,
+// timeout/attempts) for a bounded attempt count, or flat maxAttemptBudget when attempts
+// is 0 (infinite retries - there is no attempt count to divide by).
+func TestAttemptBudget(t *testing.T) {
+	cases := []struct {
+		name     string
+		timeout  time.Duration
+		attempts int
+		want     time.Duration
+	}{
+		{"defaults", defaultTimeout, 3, maxAttemptBudget},
+		{"tight timeout stays below the cap", 2 * time.Second, 3, 2 * time.Second / 3},
+		{"single attempt gets the whole timeout, capped", 10 * time.Second, 1, maxAttemptBudget},
+		{"single attempt below the cap", 1 * time.Second, 1, 1 * time.Second},
+		{"infinite retries is flat at the cap", defaultTimeout, 0, maxAttemptBudget},
+		{"infinite retries ignores a tiny timeout", 50 * time.Millisecond, 0, maxAttemptBudget},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, attemptBudget(tc.timeout, tc.attempts))
+		})
+	}
+}
+
 // TestConfigSummary verifies that the startup config summary renders the effective
 // runtime configuration, including the human-readable "inf" rendering for unlimited
 // attempts and the default sequential policy when none is configured.

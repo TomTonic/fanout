@@ -28,12 +28,24 @@ const (
 	policySequential     = "sequential"
 	maxWorkerCount       = 32
 	minWorkerCount       = 2
-	dialTimeout          = 2 * time.Second
-	defaultTimeout       = 30 * time.Second
-	maxTimeout           = 5 * time.Minute
-	minTimeout           = 100 * time.Millisecond
-	readTimeout          = 2 * time.Second
-	attemptDelay         = 100 * time.Millisecond
+	// dialTimeout bounds the bootstrap resolver's own dials when resolving upstream
+	// hostnames (see bootstrap.go); it plays no part in a regular upstream request.
+	dialTimeout    = 2 * time.Second
+	defaultTimeout = 30 * time.Second
+	maxTimeout     = 5 * time.Minute
+	minTimeout     = 100 * time.Millisecond
+	// readTimeout is deadlineFromCtx's fallback budget, used only when a Client is
+	// invoked without a context deadline (direct API use outside of Fanout). Every
+	// upstream request made through Fanout carries a deadline set by processClient
+	// (see attemptBudget), which takes precedence via deadlineFromCtx.
+	readTimeout  = 2 * time.Second
+	attemptDelay = 100 * time.Millisecond
+	// maxAttemptBudget is the hard ceiling processClient places on the context deadline
+	// it carves out for a single upstream attempt (see attemptBudget). It is not
+	// configurable: it is what DoH and DoH3 already ran under before every transport
+	// was made to share one clock, chosen because those two have the most expensive
+	// handshake of the bunch.
+	maxAttemptBudget = 4 * time.Second
 	// maxReadLoopIterations is the maximum number of DNS response messages the client will read
 	// while waiting for one whose ID matches the request. This guards against a malicious or
 	// misbehaving upstream that sends many responses with wrong IDs.

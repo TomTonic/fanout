@@ -254,6 +254,27 @@ func (f *Fanout) match(state *request.Request) bool {
 	return plugin.Name(f.From).Matches(state.Name()) && !f.ExcludeDomains.Contains(state.Name())
 }
 
+// attemptBudget returns the context budget processClient carves out for a single
+// upstream attempt, so every transport is bounded by the same gross clock instead of
+// each hiding its own per-phase caps (see const.go's maxAttemptBudget doc and issue #47).
+//
+// It is min(maxAttemptBudget, timeout/attempts) for a bounded attempt count. When
+// attempts is 0 (infinite retries, bounded only by timeout - see Attempts) there is no
+// attempt count to divide by, so it is simply maxAttemptBudget: each attempt still gets
+// no more than any other transport ever does, and processClient's own ctx.Err() check
+// plus the fact that context.WithTimeout can never outlive its parent's deadline are
+// what stop retries once timeout itself elapses.
+func attemptBudget(timeout time.Duration, attempts int) time.Duration {
+	if attempts <= 0 {
+		return maxAttemptBudget
+	}
+	budget := timeout / time.Duration(attempts)
+	if budget > maxAttemptBudget {
+		budget = maxAttemptBudget
+	}
+	return budget
+}
+
 func (f *Fanout) processClient(ctx context.Context, c Client, r *request.Request) *response {
 	start := time.Now()
 	var err error
@@ -261,12 +282,15 @@ func (f *Fanout) processClient(ctx context.Context, c Client, r *request.Request
 	defer delayTimer.Stop()
 	// Drain the initial timer fire so the first attempt runs immediately.
 	<-delayTimer.C
+	budget := attemptBudget(f.Timeout, f.Attempts)
 	for j := 0; j < f.Attempts || f.Attempts == 0; {
 		if ctx.Err() != nil {
 			return &response{client: c, response: nil, start: start, err: fmt.Errorf("upstream %s: %w", c.Endpoint(), ctx.Err())}
 		}
 		var msg *dns.Msg
-		msg, err = c.Request(ctx, r)
+		attemptCtx, cancel := context.WithTimeout(ctx, budget)
+		msg, err = c.Request(attemptCtx, r)
+		cancel()
 		if err == nil {
 			return &response{client: c, response: msg, start: start, err: err}
 		}
