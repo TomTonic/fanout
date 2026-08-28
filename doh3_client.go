@@ -46,7 +46,7 @@ type doh3Client struct {
 	retiredTransports map[*http3.Transport]*time.Timer
 }
 
-var doh3RetiredTransportCloseDelay = readTimeout + dialTimeout
+var doh3RetiredTransportCloseDelay = maxAttemptBudget
 
 // NewDoH3Client creates a new DNS-over-HTTPS client using HTTP/3 (QUIC) transport.
 // The endpoint must be a full HTTPS URL (e.g. "https://dns.google/dns-query").
@@ -78,6 +78,7 @@ func newDoH3ClientFull(endpoint string, tlsConfig *tls.Config, bootstrap *bootst
 
 	h3Transport := &http3.Transport{
 		TLSClientConfig: tlsConfig,
+		QUICConfig:      doh3QUICConfig(),
 	}
 	if bootstrap != nil {
 		h3Transport.Dial = bootstrapQUICDial(bootstrap)
@@ -88,11 +89,22 @@ func newDoH3ClientFull(endpoint string, tlsConfig *tls.Config, bootstrap *bootst
 		bootstrap:         bootstrap,
 		transport:         h3Transport,
 		retiredTransports: make(map[*http3.Transport]*time.Timer),
+		// No Client.Timeout: NewRequestWithContext already carries the per-attempt
+		// deadline set by processClient (see attemptBudget), and that is the only
+		// clock that should govern a request. Letting a separate, shorter HTTP
+		// timeout race the QUIC handshake is what caused #45/#46.
 		h3Client: &http.Client{
 			Transport: h3Transport,
-			Timeout:   readTimeout + dialTimeout,
 		},
 	}
+}
+
+// doh3QUICConfig returns the quic.Config used for dialing new DoH3 connections. It sets
+// HandshakeIdleTimeout to maxAttemptBudget instead of leaving quic-go's own 5s default in
+// place, so a stalled handshake gives up on the same clock as everything else rather than
+// outliving the ctx deadline the request is already bound to.
+func doh3QUICConfig() *quic.Config {
+	return &quic.Config{HandshakeIdleTimeout: maxAttemptBudget}
 }
 
 // bootstrapQUICDial returns a Dial function for http3.Transport that resolves
@@ -140,13 +152,13 @@ func (c *doh3Client) SetTLSConfig(cfg *tls.Config) {
 
 	newTransport := &http3.Transport{
 		TLSClientConfig: nextCfg,
+		QUICConfig:      doh3QUICConfig(),
 	}
 	if c.bootstrap != nil {
 		newTransport.Dial = bootstrapQUICDial(c.bootstrap)
 	}
 	newClient := &http.Client{
 		Transport: newTransport,
-		Timeout:   readTimeout + dialTimeout,
 	}
 
 	var old *http3.Transport

@@ -65,20 +65,6 @@ type client struct {
 	transport Transport
 	addr      string
 	net       string
-	// readTimeoutOverride bounds a single response read, replacing the readTimeout
-	// default when non-zero. Only tests set it: an upstream that is deliberately
-	// silent otherwise costs the full production timeout per attempt, which is what
-	// made the fanout suites spend most of their runtime asleep. Production clients
-	// leave it zero and get readTimeout.
-	readTimeoutOverride time.Duration
-}
-
-// responseReadTimeout returns the deadline budget for one response read.
-func (c *client) responseReadTimeout() time.Duration {
-	if c.readTimeoutOverride > 0 {
-		return c.readTimeoutOverride
-	}
-	return readTimeout
 }
 
 // NewClient creates a plain DNS client for addr over net.
@@ -182,7 +168,7 @@ func (c *client) Request(ctx context.Context, r *request.Request) (*dns.Msg, err
 		}
 	}()
 
-	ret, err := c.exchangeMsg(conn, r)
+	ret, err := c.exchangeMsg(ctx, conn, r)
 	if err != nil {
 		if shouldSuppressRequestFailure(ctx, err) {
 			return nil, observeSuppressedRequestFailure(ctx, c.addr, err)
@@ -227,14 +213,16 @@ func clampUDPSize(size int) uint16 {
 }
 
 // exchangeMsg writes the DNS query and reads responses until a matching ID is found.
-func (c *client) exchangeMsg(conn *dns.Conn, r *request.Request) (*dns.Msg, error) {
-	if err := conn.SetWriteDeadline(time.Now().Add(dialTimeout)); err != nil {
+// Both deadlines derive from ctx, falling back to readTimeout only when ctx carries
+// none (direct API use outside of Fanout; see deadlineFromCtx).
+func (c *client) exchangeMsg(ctx context.Context, conn *dns.Conn, r *request.Request) (*dns.Msg, error) {
+	if err := conn.SetWriteDeadline(deadlineFromCtx(ctx)); err != nil {
 		return nil, withRequestErrorClass(err, requestErrorRequestSend)
 	}
 	if err := conn.WriteMsg(r.Req); err != nil {
 		return nil, withRequestErrorClass(err, requestErrorRequestSend)
 	}
-	if err := conn.SetReadDeadline(time.Now().Add(c.responseReadTimeout())); err != nil {
+	if err := conn.SetReadDeadline(deadlineFromCtx(ctx)); err != nil {
 		return nil, withRequestErrorClass(err, requestErrorResponseRead)
 	}
 	for range maxReadLoopIterations {
@@ -247,6 +235,19 @@ func (c *client) exchangeMsg(conn *dns.Conn, r *request.Request) (*dns.Msg, erro
 		}
 	}
 	return nil, withRequestErrorClass(errMaxReadLoopExceeded, requestErrorProtocol)
+}
+
+// deadlineFromCtx returns the earlier of ctx.Deadline() and now+readTimeout.
+//
+// Every upstream request made through Fanout carries a ctx deadline set by
+// processClient (see attemptBudget), so the readTimeout fallback only matters for a
+// Client invoked directly without going through Fanout.
+func deadlineFromCtx(ctx context.Context) time.Time {
+	d := time.Now().Add(readTimeout)
+	if ctxD, ok := ctx.Deadline(); ok && ctxD.Before(d) {
+		return ctxD
+	}
+	return d
 }
 
 func withRequestSpan(ctx context.Context, addr string) (context.Context, func()) {

@@ -25,6 +25,7 @@ import (
 
 	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
+	"github.com/quic-go/quic-go"
 )
 
 // quicTestTimeout is the watchdog deadline for a QUIC-based request in a test.
@@ -41,13 +42,16 @@ import (
 const quicTestTimeout = 30 * time.Second
 
 // isQUICHandshakeStall reports whether err is the loopback stall described on
-// retryingClient, which surfaces with two different messages depending on the client.
+// retryingClient.
 //
-// DoQ dials QUIC directly, so quic-go's HandshakeIdleTimeout is what gives up, with
-// "no recent network activity". DoH3 goes through an http.Client whose Timeout is
-// readTimeout+dialTimeout (4s), and that cap is reached first, so the stall arrives
-// as "Client.Timeout exceeded while awaiting headers" instead - the server never sent
-// response headers because the QUIC handshake underneath never completed.
+// Both DoQ and DoH3 dial QUIC directly (neither keeps an http.Client.Timeout or other
+// clock of its own any more - see doqQUICConfig and doh3QUICConfig), so quic-go's
+// HandshakeIdleTimeout is what gives up on a stall, with "no recent network activity".
+// newRetryingDoH3Client raises DoH3's copy of it to quicTestTimeout for the same reason
+// DoQ's production default is already below quicTestTimeout: so quic-go, not our own
+// context deadline, is what is left to time out the handshake. The
+// "Client.Timeout exceeded while awaiting headers" match is dead in production now that
+// doh3Client has no Client.Timeout, but costs nothing to keep as a defensive fallback.
 //
 // Neither string matches a plain context deadline, which several tests assert on
 // purpose, and neither matches a DNS- or protocol-level error.
@@ -146,12 +150,15 @@ func newRetryingDoQClient(tb testing.TB, addr string, cfg *tls.Config) Client {
 
 // newRetryingDoH3Client builds a DoH3 client that tolerates the handshake stall above.
 //
-// It also lifts the client's HTTP timeout for the duration of the test. In production
-// doh3Client caps every request at readTimeout+dialTimeout (4s) via http.Client, which
-// is shorter than quic-go's 5s HandshakeIdleTimeout, so a stalled dial gets cut off
-// mid-flight instead of being allowed to fail on quic-go's terms. Raising the cap makes
-// the failure clean and gives it one signature. It asserts nothing about latency and
-// leaves production untouched.
+// It also raises the transport's QUIC handshake timeout for the duration of the test. In
+// production doh3Client sets QUICConfig.HandshakeIdleTimeout to maxAttemptBudget (4s, see
+// doh3QUICConfig) so a stalled dial gives up on the same clock as everything else instead
+// of outliving the ctx deadline it is bound to. That is shorter than quicTestTimeout, so
+// left alone it would still be what cuts a stalled handshake off, rather than letting it
+// fail on quic-go's own terms with a single clear signature. Raising it here does not
+// touch production: doh3Client has no Client.Timeout of its own any more, so the request's
+// only remaining clock is whichever of ctx and QUICConfig is shorter, and the caller's ctx
+// (quicTestTimeout) is what's meant to own it in these tests.
 //
 // Resetting a DoH3 client is harder than resetting a DoQ one, and getting it wrong is
 // what made the earlier retries useless. http3.Transport.Close is documented as
@@ -165,20 +172,28 @@ func newRetryingDoQClient(tb testing.TB, addr string, cfg *tls.Config) Client {
 func newRetryingDoH3Client(tb testing.TB, endpoint string, cfg *tls.Config) Client {
 	tb.Helper()
 	inner := newDoH3ClientWithTLS(endpoint, cfg)
-	if dc, ok := inner.(*doh3Client); ok {
-		dc.mu.Lock()
-		dc.h3Client.Timeout = quicTestTimeout
-		dc.mu.Unlock()
-	}
+	liftHandshakeIdleTimeout(inner)
 	reset := func() {
 		inner.SetTLSConfig(cfg)
-		if dc, ok := inner.(*doh3Client); ok {
-			dc.mu.Lock()
-			dc.h3Client.Timeout = quicTestTimeout
-			dc.mu.Unlock()
-		}
+		liftHandshakeIdleTimeout(inner)
 	}
 	return retryingClient{Client: inner, tb: tb, reset: reset}
+}
+
+// liftHandshakeIdleTimeout raises a doh3Client's QUIC handshake timeout to
+// quicTestTimeout, so a stalled handshake fails on quic-go's own terms during tests
+// instead of the shorter production default (see newRetryingDoH3Client).
+func liftHandshakeIdleTimeout(c Client) {
+	dc, ok := c.(*doh3Client)
+	if !ok {
+		return
+	}
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+	if dc.transport.QUICConfig == nil {
+		dc.transport.QUICConfig = &quic.Config{}
+	}
+	dc.transport.QUICConfig.HandshakeIdleTimeout = quicTestTimeout
 }
 
 // concreteClient unwraps the retry wrapper, for tests that reach into the concrete

@@ -94,7 +94,14 @@ fanout FROM TO... {
   directory and must stay inside it: `../` segments are rejected, and so is a symbolic
   link whose target lies outside. Use an absolute path to load a list from elsewhere.
 * `attempt-count` — the number of failed attempts before considering an upstream to be down. If `0`, the upstream will never be marked as down and the request will run until `timeout`. Default is `3`.
-* `timeout` — the maximum time for the entire request. Default is `30s`.
+* `timeout` — the maximum time for the entire request. Default is `30s`. Each individual
+  attempt against an upstream is itself capped at `min(4s, timeout / attempt-count)`,
+  identically for every transport (plain UDP/TCP, DoT, DoH, DoH3, DoQ) — no single attempt,
+  however slow to connect or handshake, can outlast its share of `timeout`. With the
+  defaults (`30s` / `3`) that budget is `4s` per attempt; at `timeout 2s` (default
+  `attempt-count`) it is `~0.67s`. With `attempt-count 0` (infinite retries) each attempt
+  is capped at a flat `4s` regardless of `timeout`, since there is no attempt count to
+  divide it by; retries continue until `timeout` elapses.
 * `bootstrap` **IP...** — one or more IP addresses (with optional `:port`, default port 53) of plain-DNS
   servers used to resolve hostnames in upstream URLs. This is required when DoH, DoH3, or DoQ upstreams
   use hostname-based endpoints (e.g. `dns.nextdns.io`) and the system's default DNS resolver

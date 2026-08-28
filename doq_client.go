@@ -190,7 +190,7 @@ func (c *doqClient) exchangeOnStream(ctx context.Context, stream *quic.Stream, r
 // writeQuery packs and writes a DNS query to the QUIC stream with a 2-byte length prefix.
 func (c *doqClient) writeQuery(ctx context.Context, stream *quic.Stream, req *dns.Msg) error {
 	// Set write deadline from context or fallback.
-	writeDeadline := deadlineFromCtx(ctx, dialTimeout)
+	writeDeadline := deadlineFromCtx(ctx)
 	if err := stream.SetWriteDeadline(writeDeadline); err != nil {
 		return withRequestErrorClass(fmt.Errorf("DoQ: failed to set write deadline: %w", err), requestErrorRequestSend)
 	}
@@ -225,7 +225,7 @@ func (c *doqClient) writeQuery(ctx context.Context, stream *quic.Stream, req *dn
 // readResponse reads a DNS response from the QUIC stream.
 func (c *doqClient) readResponse(ctx context.Context, stream *quic.Stream, origID uint16) (*dns.Msg, error) {
 	// Set read deadline.
-	readDeadline := deadlineFromCtx(ctx, readTimeout)
+	readDeadline := deadlineFromCtx(ctx)
 	if err := stream.SetReadDeadline(readDeadline); err != nil {
 		return nil, withRequestErrorClass(fmt.Errorf("DoQ: failed to set read deadline: %w", err), requestErrorResponseRead)
 	}
@@ -258,13 +258,16 @@ func (c *doqClient) readResponse(ctx context.Context, stream *quic.Stream, origI
 	return ret, nil
 }
 
-// deadlineFromCtx returns the earlier of ctx.Deadline() and now+fallback.
-func deadlineFromCtx(ctx context.Context, fallback time.Duration) time.Time {
-	d := time.Now().Add(fallback)
-	if ctxD, ok := ctx.Deadline(); ok && ctxD.Before(d) {
-		return ctxD
+// doqQUICConfig returns the quic.Config used for dialing new DoQ connections. It sets
+// HandshakeIdleTimeout to maxAttemptBudget instead of leaving quic-go's own 5s default in
+// place, so a stalled handshake gives up on the same clock as everything else rather than
+// outliving the ctx deadline the request is already bound to.
+func doqQUICConfig() *quic.Config {
+	return &quic.Config{
+		HandshakeIdleTimeout: maxAttemptBudget,
+		MaxIdleTimeout:       30 * time.Second,
+		KeepAlivePeriod:      15 * time.Second,
 	}
-	return d
 }
 
 // getOrDialConn returns the existing QUIC connection or dials a new one.
@@ -297,10 +300,7 @@ func (c *doqClient) getOrDialConn(ctx context.Context) (*quic.Conn, error) {
 		}
 		var errs []error
 		for _, resolved := range resolvedAddrs {
-			conn, err := quic.DialAddr(ctx, resolved, tlsCfg, &quic.Config{
-				MaxIdleTimeout:  30 * time.Second,
-				KeepAlivePeriod: 15 * time.Second,
-			})
+			conn, err := quic.DialAddr(ctx, resolved, tlsCfg, doqQUICConfig())
 			if err == nil {
 				c.conn = conn
 				return conn, nil
@@ -313,10 +313,7 @@ func (c *doqClient) getOrDialConn(ctx context.Context) (*quic.Conn, error) {
 		return nil, fmt.Errorf("bootstrap QUIC dial to %s failed: no addresses resolved", c.addr)
 	}
 
-	conn, err := quic.DialAddr(ctx, dialAddr, tlsCfg, &quic.Config{
-		MaxIdleTimeout:  30 * time.Second,
-		KeepAlivePeriod: 15 * time.Second,
-	})
+	conn, err := quic.DialAddr(ctx, dialAddr, tlsCfg, doqQUICConfig())
 	if err != nil {
 		return nil, err
 	}
