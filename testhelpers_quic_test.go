@@ -84,35 +84,101 @@ func isQUICHandshakeStall(err error) bool {
 type retryingClient struct {
 	Client
 	tb testing.TB
+	// reset drops whatever the failed attempt left behind, so the next attempt dials a
+	// genuinely new connection. Without it the retry is pointless.
+	reset func()
 }
+
+// quicStallAttempts is how many times a request may be re-sent after a stalled
+// handshake before the test is allowed to fail.
+//
+// One retry is not always enough. The reset below cannot drop a pooled DoH3
+// connection whose use count has not fallen back to zero yet, so a retry can land on
+// the same dead connection and stall again; a short pause between attempts gives that
+// bookkeeping time to settle. Three attempts takes the residual far below the rate of
+// the stall itself while still failing promptly on a real defect, which reproduces on
+// every attempt rather than intermittently.
+const quicStallAttempts = 3
 
 // Request implements Client.
 func (c retryingClient) Request(ctx context.Context, r *request.Request) (*dns.Msg, error) {
-	resp, err := c.Client.Request(ctx, r)
-	if !isQUICHandshakeStall(err) {
-		return resp, err
-	}
 	c.tb.Helper()
-	c.tb.Logf("retrying after a stalled QUIC handshake: %v", err)
-	if rc, ok := c.Client.(interface{ resetConn() }); ok {
-		rc.resetConn()
+	var resp *dns.Msg
+	var err error
+	for attempt := range quicStallAttempts {
+		resp, err = c.Client.Request(ctx, r)
+		if !isQUICHandshakeStall(err) {
+			return resp, err
+		}
+		c.tb.Logf("attempt %d hit a stalled QUIC handshake: %v", attempt+1, err)
+		if c.reset != nil {
+			c.reset()
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		time.Sleep(quicStallResetDelay)
 	}
-	return c.Client.Request(ctx, r)
+	return resp, err
 }
+
+// quicStallResetDelay lets a just-failed connection finish leaving the pool before
+// the next attempt dials.
+const quicStallResetDelay = 50 * time.Millisecond
 
 // unwrap returns the wrapped client, for the few tests that need the concrete type.
 func (c retryingClient) unwrap() Client { return c.Client }
 
 // newRetryingDoQClient builds a DoQ client that tolerates the handshake stall above.
+//
+// resetConn is enough here: doqClient caches a single *quic.Conn and clearing it makes
+// the next request dial afresh.
 func newRetryingDoQClient(tb testing.TB, addr string, cfg *tls.Config) Client {
 	tb.Helper()
-	return retryingClient{Client: newDoQClientWithTLS(addr, cfg), tb: tb}
+	inner := newDoQClientWithTLS(addr, cfg)
+	reset := func() {
+		if dc, ok := inner.(*doqClient); ok {
+			dc.resetConn()
+		}
+	}
+	return retryingClient{Client: inner, tb: tb, reset: reset}
 }
 
 // newRetryingDoH3Client builds a DoH3 client that tolerates the handshake stall above.
+//
+// It also lifts the client's HTTP timeout for the duration of the test. In production
+// doh3Client caps every request at readTimeout+dialTimeout (4s) via http.Client, which
+// is shorter than quic-go's 5s HandshakeIdleTimeout, so a stalled dial gets cut off
+// mid-flight instead of being allowed to fail on quic-go's terms. Raising the cap makes
+// the failure clean and gives it one signature. It asserts nothing about latency and
+// leaves production untouched.
+//
+// Resetting a DoH3 client is harder than resetting a DoQ one, and getting it wrong is
+// what made the earlier retries useless. http3.Transport.Close is documented as
+// terminal, so it cannot be used on a client that has to keep working;
+// CloseIdleConnections looked right but silently skips any connection whose use count
+// has not dropped back to zero, which is exactly the state a stalled dial leaves behind
+// - so every retry went back to the same dead connection and stalled again, three times
+// over. SetTLSConfig is the one path that genuinely swaps in a fresh http3.Transport,
+// and it retires the old one through the client's normal grace-period machinery, so
+// Close still cleans everything up and goleak stays satisfied.
 func newRetryingDoH3Client(tb testing.TB, endpoint string, cfg *tls.Config) Client {
 	tb.Helper()
-	return retryingClient{Client: newDoH3ClientWithTLS(endpoint, cfg), tb: tb}
+	inner := newDoH3ClientWithTLS(endpoint, cfg)
+	if dc, ok := inner.(*doh3Client); ok {
+		dc.mu.Lock()
+		dc.h3Client.Timeout = quicTestTimeout
+		dc.mu.Unlock()
+	}
+	reset := func() {
+		inner.SetTLSConfig(cfg)
+		if dc, ok := inner.(*doh3Client); ok {
+			dc.mu.Lock()
+			dc.h3Client.Timeout = quicTestTimeout
+			dc.mu.Unlock()
+		}
+	}
+	return retryingClient{Client: inner, tb: tb, reset: reset}
 }
 
 // concreteClient unwraps the retry wrapper, for tests that reach into the concrete

@@ -39,6 +39,7 @@ import (
 	"github.com/coredns/coredns/plugin/test"
 	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
+	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/stretchr/testify/require"
 )
@@ -46,6 +47,8 @@ import (
 // doh3TestServer wraps an http3.Server with its TLS certificate material and address.
 type doh3TestServer struct {
 	server    *http3.Server
+	listener  *quic.EarlyListener
+	transport *quic.Transport
 	conn      net.PacketConn
 	addr      string
 	clientTLS *tls.Config
@@ -55,12 +58,39 @@ type doh3TestServer struct {
 // close shuts down the HTTP/3 test server.
 func (s *doh3TestServer) close() {
 	_ = s.server.Close()
+	_ = s.listener.Close()
+	_ = s.transport.Close()
 	_ = s.conn.Close()
 }
 
 // url returns the https:// URL of the test server for the /dns-query endpoint.
 func (s *doh3TestServer) url() string {
 	return fmt.Sprintf("https://%s/dns-query", s.addr)
+}
+
+// listenDoH3 brings up the QUIC listener for a DoH3 test server.
+//
+// The listener is built here rather than inside the goroutine below. http3.Server.Serve
+// does the whole listener setup itself, so "go h3Server.Serve(conn)" returned before
+// anything was accepting and discarded any setup failure along with the error. The DoQ
+// helper has always built its listener synchronously and run only the accept loop in a
+// goroutine; this brings DoH3 in line. ListenEarly is what Serve uses internally, and
+// *quic.EarlyListener satisfies http3.QUICListener, so ServeListener substitutes exactly.
+func listenDoH3(t *testing.T, serverTLS *tls.Config, h3Server *http3.Server) (net.PacketConn, *quic.Transport, *quic.EarlyListener) {
+	t.Helper()
+
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	transport := &quic.Transport{Conn: conn}
+	listener, err := transport.ListenEarly(http3.ConfigureTLSConfig(serverTLS), &quic.Config{})
+	require.NoError(t, err)
+
+	go func() {
+		_ = h3Server.ServeListener(listener)
+	}()
+
+	return conn, transport, listener
 }
 
 // newDoH3TestServer starts an HTTP/3 (QUIC) server that handles DNS-over-HTTPS requests.
@@ -146,10 +176,6 @@ func newDoH3TestServer(t *testing.T, handler dns.HandlerFunc) *doh3TestServer { 
 		_, _ = w.Write(packed)
 	})
 
-	// Listen on a random UDP port.
-	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
-	require.NoError(t, err)
-
 	serverTLS := &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
 		MinVersion:   tls.VersionTLS13,
@@ -160,12 +186,12 @@ func newDoH3TestServer(t *testing.T, handler dns.HandlerFunc) *doh3TestServer { 
 		Handler:   mux,
 	}
 
-	go func() {
-		_ = h3Server.Serve(conn)
-	}()
+	conn, transport, listener := listenDoH3(t, serverTLS, h3Server)
 
 	srv := &doh3TestServer{
 		server:    h3Server,
+		listener:  listener,
+		transport: transport,
 		conn:      conn,
 		addr:      conn.LocalAddr().String(),
 		clientTLS: clientTLS,
