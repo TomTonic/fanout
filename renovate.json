@@ -11,6 +11,23 @@
       "matchManagers": ["gomod"],
       "matchPackageNames": ["github.com/coredns/caddy"],
       "allowedVersions": "<2.0.0"
+    },
+    {
+      "description": "Never propose the v2 module path either, in case it ever surfaces as a separate dependency.",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["github.com/coredns/caddy/v2"],
+      "enabled": false
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Keep GO_VERSION in GitHub workflows in sync with go.mod",
+      "managerFilePatterns": ["/^\\.github\\/workflows\\/.*\\.ya?ml$/"],
+      "matchStrings": ["GO_VERSION:\\s*'?(?<currentValue>\\d+\\.\\d+)'?"],
+      "depNameTemplate": "go",
+      "datasourceTemplate": "golang-version",
+      "versioningTemplate": "semver"
     }
   ]
 }
