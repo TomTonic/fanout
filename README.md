@@ -1,6 +1,7 @@
 # fanout
 
 ![CI](https://github.com/TomTonic/fanout/workflows/ci/badge.svg)
+[![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/TomTonic/ed487c393bdb00028d67d9436770aa27/raw/fanout-coverage.json)](https://gist.github.com/TomTonic/ed487c393bdb00028d67d9436770aa27)
 [![Vulnerabilities](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/TomTonic/b4af9f82c5cc14dd9ef02f3e86f26d32/raw/grype_me-plugin_release.json)](https://gist.github.com/TomTonic/b4af9f82c5cc14dd9ef02f3e86f26d32#file-grype_me-plugin_release-md)
 
 ## About This Fork
