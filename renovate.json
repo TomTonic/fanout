@@ -3,5 +3,6 @@
   "description": "This renovate.json references the default configuration for Go projects provided by TomTonic. It ensures that all Go dependencies are kept up to date according to the best practices defined in the referenced configuration.",
   "extends": [
     "github>TomTonic/go-project-defaults"
-  ]
+  ],
+  "forkProcessing": "enabled"
 }
