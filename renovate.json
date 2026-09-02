@@ -4,5 +4,13 @@
   "extends": [
     "github>TomTonic/go-project-defaults"
   ],
-  "forkProcessing": "enabled"
+  "forkProcessing": "enabled",
+  "packageRules": [
+    {
+      "description": "coredns/caddy v2 is an incompatible API rewrite that this project cannot adopt; stay on v1.",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["github.com/coredns/caddy"],
+      "allowedVersions": "<2.0.0"
+    }
+  ]
 }
