@@ -63,7 +63,10 @@ func TestDomainGet(t *testing.T) {
 
 // TestDomain_ContainsShouldWorkFast is a performance guard for the domain-exclusion lookup that
 // runs on every DNS query. Inserts 10 000 random domain names into the trie, then asserts that
-// 10 000 Contains() calls complete in under 250 ms.
+// 10 000 Contains() calls complete in under one second. The limit is deliberately loose: under
+// -race and GC pressure the lookups take several times longer than in a plain run (about 27 ms
+// without the race detector, up to 250 ms with it), so a tight bound flaps without catching more
+// than a linear-scan regression, which would take far longer than a second.
 func TestDomain_ContainsShouldWorkFast(t *testing.T) {
 	var samples []string
 	d := NewDomain()
@@ -77,7 +80,7 @@ func TestDomain_ContainsShouldWorkFast(t *testing.T) {
 	for i := range 10000 {
 		require.True(t, d.Contains(samples[i]))
 	}
-	require.True(t, time.Since(start) < time.Second/4)
+	require.True(t, time.Since(start) < time.Second)
 }
 
 // TestDomainFewEntries verifies that two sibling domains (google.com., example.com.) are stored
