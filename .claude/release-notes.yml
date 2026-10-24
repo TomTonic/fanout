@@ -1,0 +1,13 @@
+---
+# Configuration for the release-notes agent.
+core_dependencies:
+  - module: github.com/coredns/coredns
+    name: CoreDNS
+  - module: github.com/quic-go/quic-go
+    name: quic-go
+
+changelog_sources:
+  - module: github.com/coredns/coredns
+    url: https://github.com/coredns/coredns/releases
+  - module: github.com/quic-go/quic-go
+    url: https://github.com/quic-go/quic-go/releases
