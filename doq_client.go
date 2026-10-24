@@ -47,6 +47,7 @@ const doqInternalError quic.ApplicationErrorCode = 0x1
 type doqClient struct {
 	addr      string           // host:port of the DoQ server
 	bootstrap *bootstrapConfig // bootstrap config for hostname resolution (nil = system default)
+	baseDial  quicDialFunc     // dials without bootstrap; wrapped to use absolute names
 	mu        sync.Mutex       // protects conn and tlsConfig
 	conn      *quic.Conn
 	tlsConfig *tls.Config
@@ -67,6 +68,13 @@ func newDoQClientWithTLS(addr string, tlsConfig *tls.Config) Client {
 // When a bootstrap resolver is provided, hostname resolution for the server
 // address uses that resolver instead of the system default.
 func newDoQClientFull(addr string, tlsConfig *tls.Config, bootstrap *bootstrapConfig) Client {
+	return newDoQClientWithDial(addr, tlsConfig, bootstrap, quic.DialAddr)
+}
+
+// newDoQClientWithDial is newDoQClientFull with the QUIC dial function used without a
+// bootstrap resolver made explicit, so tests can see which address the system resolver
+// would be asked for.
+func newDoQClientWithDial(addr string, tlsConfig *tls.Config, bootstrap *bootstrapConfig, baseDial quicDialFunc) Client {
 	if tlsConfig == nil {
 		tlsConfig = &tls.Config{
 			MinVersion: tls.VersionTLS13,
@@ -82,6 +90,7 @@ func newDoQClientFull(addr string, tlsConfig *tls.Config, bootstrap *bootstrapCo
 	return &doqClient{
 		addr:      addr,
 		bootstrap: bootstrap,
+		baseDial:  baseDial,
 		tlsConfig: tlsConfig,
 	}
 }
@@ -288,7 +297,6 @@ func (c *doqClient) getOrDialConn(ctx context.Context) (*quic.Conn, error) {
 	}
 
 	tlsCfg := c.tlsConfig.Clone()
-	dialAddr := c.addr
 
 	if c.bootstrap != nil {
 		resolvedAddrs, hostname, err := c.bootstrap.resolveHostCandidates(ctx, c.addr)
@@ -313,7 +321,7 @@ func (c *doqClient) getOrDialConn(ctx context.Context) (*quic.Conn, error) {
 		return nil, fmt.Errorf("bootstrap QUIC dial to %s failed: no addresses resolved", c.addr)
 	}
 
-	conn, err := quic.DialAddr(ctx, dialAddr, tlsCfg, doqQUICConfig())
+	conn, err := absoluteQUICDial(c.baseDial)(ctx, c.addr, tlsCfg, doqQUICConfig())
 	if err != nil {
 		return nil, err
 	}

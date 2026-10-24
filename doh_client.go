@@ -77,6 +77,14 @@ func newDoHClientFull(endpoint string, tlsConfig *tls.Config, bootstrap *bootstr
 // support), breaking circular dependencies when the system default resolver
 // points at this DNS service.
 func newHTTP2ClientWithBootstrap(tlsConfig *tls.Config, bootstrap *bootstrapConfig) *http.Client {
+	return newHTTP2ClientWithDialer(tlsConfig, bootstrap, (&net.Dialer{}).DialContext)
+}
+
+// newHTTP2ClientWithDialer is newHTTP2ClientWithBootstrap with the dial function used
+// when there is no bootstrap resolver made explicit, so tests can see which address the
+// system resolver would be asked for. Names are dialed as absolute names (see
+// absoluteDialContext).
+func newHTTP2ClientWithDialer(tlsConfig *tls.Config, bootstrap *bootstrapConfig, dial func(ctx context.Context, network, addr string) (net.Conn, error)) *http.Client {
 	if tlsConfig == nil {
 		tlsConfig = &tls.Config{
 			MinVersion: tls.VersionTLS12,
@@ -88,7 +96,7 @@ func newHTTP2ClientWithBootstrap(tlsConfig *tls.Config, bootstrap *bootstrapConf
 	if bootstrap != nil {
 		dialCtx = bootstrap.dialContext()
 	} else {
-		dialCtx = (&net.Dialer{}).DialContext
+		dialCtx = absoluteDialContext(dial)
 	}
 	tr := &http.Transport{
 		TLSClientConfig:     tlsConfig,
