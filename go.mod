@@ -4,7 +4,7 @@ go 1.26.9
 
 require (
 	github.com/coredns/caddy v1.1.4
-	github.com/coredns/coredns v1.14.7
+	github.com/coredns/coredns v1.15.0
 	github.com/dnstap/golang-dnstap v0.4.0
 	github.com/miekg/dns v1.1.73
 	github.com/opentracing/opentracing-go v1.2.0
@@ -28,7 +28,6 @@ require (
 	github.com/prometheus/common v0.72.1 // indirect
 	github.com/prometheus/procfs v0.22.0 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
-	go.uber.org/mock v0.6.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/net v0.61.0 // indirect
