@@ -37,6 +37,7 @@ import (
 type doh3Client struct {
 	endpoint  string           // full URL, e.g. "https://dns.google/dns-query"
 	bootstrap *bootstrapConfig // bootstrap config for hostname resolution (nil = system default)
+	baseDial  quicDialFunc     // dials without bootstrap; wrapped to use absolute names
 	mu        sync.Mutex       // protects h3Client, transport, and retiredTransports during SetTLSConfig
 	h3Client  *http.Client
 	transport *http3.Transport
@@ -64,6 +65,13 @@ func newDoH3ClientWithTLS(endpoint string, tlsConfig *tls.Config) Client {
 // function that resolves the server hostname through the bootstrap resolver
 // instead of the system default, breaking circular DNS dependencies.
 func newDoH3ClientFull(endpoint string, tlsConfig *tls.Config, bootstrap *bootstrapConfig) Client {
+	return newDoH3ClientWithDial(endpoint, tlsConfig, bootstrap, quic.DialAddrEarly)
+}
+
+// newDoH3ClientWithDial is newDoH3ClientFull with the QUIC dial function used without
+// a bootstrap resolver made explicit, so tests can see which address the system
+// resolver would be asked for.
+func newDoH3ClientWithDial(endpoint string, tlsConfig *tls.Config, bootstrap *bootstrapConfig, baseDial quicDialFunc) Client {
 	if tlsConfig == nil {
 		tlsConfig = &tls.Config{
 			MinVersion: tls.VersionTLS13,
@@ -79,14 +87,13 @@ func newDoH3ClientFull(endpoint string, tlsConfig *tls.Config, bootstrap *bootst
 	h3Transport := &http3.Transport{
 		TLSClientConfig: tlsConfig,
 		QUICConfig:      doh3QUICConfig(),
-	}
-	if bootstrap != nil {
-		h3Transport.Dial = bootstrapQUICDial(bootstrap)
+		Dial:            doh3Dial(bootstrap, baseDial),
 	}
 
 	return &doh3Client{
 		endpoint:          endpoint,
 		bootstrap:         bootstrap,
+		baseDial:          baseDial,
 		transport:         h3Transport,
 		retiredTransports: make(map[*http3.Transport]*time.Timer),
 		// No Client.Timeout: NewRequestWithContext already carries the per-attempt
@@ -97,6 +104,17 @@ func newDoH3ClientFull(endpoint string, tlsConfig *tls.Config, bootstrap *bootst
 			Transport: h3Transport,
 		},
 	}
+}
+
+// doh3Dial picks how a DoH3 transport dials: through the bootstrap resolver if there
+// is one, otherwise through baseDial with absolute upstream names. http3.Transport has
+// no hook to make the resolution of its default dial absolute, so Dial is always set
+// (each connection then gets its own UDP socket, as with bootstrap).
+func doh3Dial(bootstrap *bootstrapConfig, baseDial quicDialFunc) quicDialFunc {
+	if bootstrap != nil {
+		return bootstrapQUICDial(bootstrap)
+	}
+	return absoluteQUICDial(baseDial)
 }
 
 // doh3QUICConfig returns the quic.Config used for dialing new DoH3 connections. It sets
@@ -153,9 +171,7 @@ func (c *doh3Client) SetTLSConfig(cfg *tls.Config) {
 	newTransport := &http3.Transport{
 		TLSClientConfig: nextCfg,
 		QUICConfig:      doh3QUICConfig(),
-	}
-	if c.bootstrap != nil {
-		newTransport.Dial = bootstrapQUICDial(c.bootstrap)
+		Dial:            doh3Dial(c.bootstrap, c.baseDial),
 	}
 	newClient := &http.Client{
 		Transport: newTransport,

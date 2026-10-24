@@ -109,6 +109,12 @@ fanout FROM TO... {
   resolver sends plain-UDP DNS queries to the specified IPs, bypassing the system resolver entirely.
   Only the _hostname resolution_ of upstream endpoints uses the bootstrap servers; regular client
   queries still go through the configured upstreams.
+  Host names in `https://`, `h3://` and `quic://` upstreams are always looked up as _absolute_
+  names, as if written with a trailing dot, with or without `bootstrap`. The search domains and
+  `ndots` setting of the machine's resolver configuration are never applied, so the upstream's
+  name cannot leak into, or be redirected by, an unrelated zone. If you relied on a search domain
+  to complete a short upstream name (such as `quic://dnsbox`), write the full name instead.
+  This matches CoreDNS's `forward` plugin since v1.15.0.
 * `ecs` [**CIDR**] — enable EDNS0 Client Subnet ([RFC 7871](https://datatracker.ietf.org/doc/html/rfc7871))
   on bootstrap DNS queries. Requires a prior `bootstrap` directive.
   * Without argument (`ecs`): the local outgoing IP is auto-detected and sent as a /24 (IPv4) or
